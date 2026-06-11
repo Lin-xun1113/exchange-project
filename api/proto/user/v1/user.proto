@@ -1,0 +1,142 @@
+syntax = "proto3";
+
+package user.v1;
+
+option go_package = "github.com/linxun2025/exchange-project/api/gen/user/v1;userpb";
+
+import "google/protobuf/timestamp.proto";
+
+// 用户服务定义
+service UserService {
+    // 获取用户信息
+    rpc GetUser(GetUserRequest) returns (GetUserResponse);
+    // 用户登录
+    rpc Login(LoginRequest) returns (LoginResponse);
+    // 创建用户（注册）
+    rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+    // 获取用户余额
+    rpc GetBalance(GetBalanceRequest) returns (GetBalanceResponse);
+    // 冻结余额
+    rpc FreezeAmount(FreezeAmountRequest) returns (FreezeAmountResponse);
+    // 解冻余额
+    rpc UnfreezeAmount(UnfreezeAmountRequest) returns (UnfreezeAmountResponse);
+    // 扣减余额（撮合成交后调用）
+    rpc DeductAmount(DeductAmountRequest) returns (DeductAmountResponse);
+    // 增加余额
+    rpc AddAmount(AddAmountRequest) returns (AddAmountResponse);
+}
+
+// 用户信息
+message User {
+    int64 id = 1;
+    string username = 2;
+    string email = 3;
+    string balance = 4;         // 使用 string 以避免浮点数精度问题
+    string frozen_balance = 5;
+    int32 status = 6;
+    google.protobuf.Timestamp created_at = 7;
+    google.protobuf.Timestamp updated_at = 8;
+}
+
+// 获取用户请求
+message GetUserRequest {
+    int64 user_id = 1;
+}
+
+// 获取用户响应
+message GetUserResponse {
+    User user = 1;
+}
+
+// 登录请求
+message LoginRequest {
+    string username = 1;
+    string password = 2;
+}
+
+// 登录响应
+message LoginResponse {
+    int64 user_id = 1;
+    string username = 2;
+    string role = 3;
+}
+
+// 创建用户请求
+message CreateUserRequest {
+    string username = 1;
+    string password = 2;
+    string email = 3;
+    string initial_balance = 4;  // 初始余额，string 类型
+}
+
+// 创建用户响应
+message CreateUserResponse {
+    User user = 1;
+}
+
+// 获取余额请求
+message GetBalanceRequest {
+    int64 user_id = 1;
+}
+
+// 获取余额响应
+message GetBalanceResponse {
+    int64 user_id = 1;
+    string available_balance = 2;  // 可用余额
+    string frozen_balance = 3;     // 冻结余额
+    string total_balance = 4;      // 总余额
+}
+
+// 冻结余额请求
+message FreezeAmountRequest {
+    int64 user_id = 1;
+    string amount = 2;             // 冻结金额
+    string order_id = 3;           // 关联订单ID
+}
+
+// 冻结余额响应
+message FreezeAmountResponse {
+    bool success = 1;
+    string new_available_balance = 2;
+    string new_frozen_balance = 3;
+}
+
+// 解冻余额请求
+message UnfreezeAmountRequest {
+    int64 user_id = 1;
+    string amount = 2;             // 解冻金额
+    string order_id = 3;           // 关联订单ID
+}
+
+// 解冻余额响应
+message UnfreezeAmountResponse {
+    bool success = 1;
+    string new_available_balance = 2;
+    string new_frozen_balance = 3;
+}
+
+// 扣减余额请求（用于撮合成交）
+message DeductAmountRequest {
+    int64 user_id = 1;
+    string amount = 2;             // 扣减金额
+    string order_id = 3;           // 关联订单ID
+}
+
+// 扣减余额响应
+message DeductAmountResponse {
+    bool success = 1;
+    string new_balance = 2;
+}
+
+// 增加余额请求
+message AddAmountRequest {
+    int64 user_id = 1;
+    string amount = 2;             // 增加金额
+    string trade_id = 3;           // 关联交易ID
+}
+
+// 增加余额响应
+message AddAmountResponse {
+    bool success = 1;
+    string new_balance = 2;
+}

@@ -1,0 +1,148 @@
+version: '3.8'
+
+services:
+  # MySQL 数据库
+  mysql:
+    image: mysql:8.0
+    container_name: exchange-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: exchange
+      MYSQL_USER: exchange
+      MYSQL_PASSWORD: exchange123
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./migrations:/docker-entrypoint-initdb.d
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-ppassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis 缓存
+  redis:
+    image: redis:7-alpine
+    container_name: exchange-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # API Gateway
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    container_name: exchange-gateway
+    environment:
+      APP_ENVIRONMENT: development
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USERNAME: root
+      DB_PASSWORD: password
+      DB_DATABASE: exchange
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: dev-secret-key-change-in-production
+      SERVER_PORT: 8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - exchange-network
+
+  # User Service
+  user-svc:
+    build:
+      context: .
+      dockerfile: Dockerfile.user-svc
+    container_name: exchange-user-svc
+    environment:
+      APP_ENVIRONMENT: development
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USERNAME: root
+      DB_PASSWORD: password
+      DB_DATABASE: exchange
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      GRPC_PORT: 50051
+    ports:
+      - "50051:50051"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - exchange-network
+
+  # Order Service
+  order-svc:
+    build:
+      context: .
+      dockerfile: Dockerfile.order-svc
+    container_name: exchange-order-svc
+    environment:
+      APP_ENVIRONMENT: development
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USERNAME: root
+      DB_PASSWORD: password
+      DB_DATABASE: exchange
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      GRPC_PORT: 50052
+      USER_SVC_ADDR: user-svc:50051
+      MATCHING_SVC_ADDR: matching-svc:50053
+    ports:
+      - "50052:50052"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      user-svc:
+        condition: service_started
+    networks:
+      - exchange-network
+
+  # Matching Service
+  matching-svc:
+    build:
+      context: .
+      dockerfile: Dockerfile.matching-svc
+    container_name: exchange-matching-svc
+    environment:
+      APP_ENVIRONMENT: development
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      GRPC_PORT: 50053
+    ports:
+      - "50053:50053"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - exchange-network
+
+volumes:
+  mysql_data:
+  redis_data:
+
+networks:
+  exchange-network:
+    driver: bridge
