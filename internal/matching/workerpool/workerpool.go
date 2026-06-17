@@ -160,6 +160,10 @@ func (wp *WorkerPool) Submit(task Task) error {
 
 // SubmitWithContext 提交带上下文的任务
 func (wp *WorkerPool) SubmitWithContext(ctx context.Context, task Task) error {
+	// 立即检查已取消的上下文，避免 select 中 ctx.Done() 与 channel send 的非确定性竞争
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()

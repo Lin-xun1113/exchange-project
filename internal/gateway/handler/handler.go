@@ -169,7 +169,7 @@ func NewOrderHandler(clients *client.Clients) *OrderHandler {
 type CreateOrderRequest struct {
 	Symbol         string  `json:"symbol" binding:"required"`
 	Side           string  `json:"side" binding:"required,oneof=buy sell"`
-	OrderType      string  `json:"order_type" binding:"omitempty,oneof=limit market"`
+	OrderType      string  `json:"order_type" binding:"omitempty,oneof=limit market ioc fok"`
 	Price          float64 `json:"price" binding:"required,gt=0"`
 	Quantity       float64 `json:"quantity" binding:"required,gt=0"`
 	IdempotencyKey string  `json:"idempotency_key" binding:"omitempty"`
@@ -223,12 +223,23 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 		orderSide = matchingpb.OrderSide_ORDER_SIDE_SELL
 	}
 
+	orderType := matchingpb.OrderType_ORDER_TYPE_LIMIT
+	switch req.OrderType {
+	case "market":
+		orderType = matchingpb.OrderType_ORDER_TYPE_MARKET
+	case "ioc":
+		orderType = matchingpb.OrderType_ORDER_TYPE_IOC
+	case "fok":
+		orderType = matchingpb.OrderType_ORDER_TYPE_FOK
+	}
+
 	matchingReq := &matchingpb.SubmitOrderRequest{
-		UserId:   userID,
-		Symbol:   req.Symbol,
-		Side:     orderSide,
-		Price:    formatDecimal(req.Price),
-		Quantity: formatDecimal(req.Quantity),
+		UserId:    userID,
+		Symbol:    req.Symbol,
+		Side:      orderSide,
+		OrderType: orderType,
+		Price:     formatDecimal(req.Price),
+		Quantity:  formatDecimal(req.Quantity),
 	}
 
 	matchingResp, err := h.clients.Matching.SubmitOrder(c.Request.Context(), matchingReq)

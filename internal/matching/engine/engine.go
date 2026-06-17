@@ -26,8 +26,7 @@ type PublisherInterface interface {
 type Matcher struct {
 	actorsMu     sync.Mutex
 	actors       map[string]*actor
-	wg           sync.WaitGroup
-	notifWg      sync.WaitGroup
+	exitedChans  map[string]chan struct{}
 	actorTimeout time.Duration
 	tradeRepo    TradeRepositoryInterface
 	publisher    PublisherInterface
@@ -46,11 +45,13 @@ type TradeRepositoryInterface interface {
 
 // MatchResult 撮合结果
 type MatchResult struct {
-	OrderID   string
-	Trades    []*book.Trade
-	Remaining decimal.Decimal
-	Status    string
-	Timestamp time.Time
+	OrderID     string
+	Trades      []*book.Trade
+	Remaining   decimal.Decimal
+	UnfilledQty decimal.Decimal
+	Status      string
+	Timestamp   time.Time
+	Error       error
 }
 
 // Config 撮合引擎配置
@@ -68,15 +69,15 @@ func NewMatcher(cfg Config) *Matcher {
 
 	m := &Matcher{
 		actors:       make(map[string]*actor),
+		exitedChans:  make(map[string]chan struct{}),
 		actorTimeout: cfg.ActorTimeout,
-		notify:        make(chan *MatchResult, 10000),
-		ctx:           ctx,
-		cancel:        cancel,
+		notify:       make(chan *MatchResult, 10000),
+		ctx:          ctx,
+		cancel:       cancel,
 	}
 
 	m.running.Store(true)
 
-	m.notifWg.Add(1)
 	go m.processNotifications()
 
 	logger.Info("matching engine created",
@@ -105,12 +106,14 @@ func NewMatcherWithTradeRepo(cfg Config, tradeRepo TradeRepositoryInterface) *Ma
 
 // processNotifications 处理撮合通知
 func (m *Matcher) processNotifications() {
-	defer m.notifWg.Done()
 	for {
 		select {
 		case <-m.ctx.Done():
 			return
-		case result := <-m.notify:
+		case result, ok := <-m.notify:
+			if !ok {
+				return
+			}
 			logger.Debug("match result",
 				logger.S("order_id", result.OrderID),
 				logger.I("trade_count", len(result.Trades)),
@@ -125,7 +128,8 @@ func (m *Matcher) processNotifications() {
 
 // publishTrades 发布交易事件
 func (m *Matcher) publishTrades(result *MatchResult) {
-	if m.publisher == nil || len(result.Trades) == 0 {
+	publisher := m.publisher
+	if publisher == nil || len(result.Trades) == 0 {
 		return
 	}
 
@@ -153,7 +157,7 @@ func (m *Matcher) publishTrades(result *MatchResult) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
-			if err := m.publisher.Publish(ctx, "trade", e); err != nil {
+			if err := publisher.Publish(ctx, "trade", e); err != nil {
 				logger.Error("failed to publish trade event",
 					logger.S("trade_id", tradeEvent.TradeID),
 					logger.Err(err),
@@ -165,7 +169,8 @@ func (m *Matcher) publishTrades(result *MatchResult) {
 
 // persistTrades 持久化交易记录
 func (m *Matcher) persistTrades(result *MatchResult) {
-	if m.tradeRepo == nil || len(result.Trades) == 0 {
+	tradeRepo := m.tradeRepo
+	if tradeRepo == nil || len(result.Trades) == 0 {
 		return
 	}
 
@@ -187,7 +192,7 @@ func (m *Matcher) persistTrades(result *MatchResult) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if err := m.tradeRepo.CreateBatch(ctx, modelTrades); err != nil {
+		if err := tradeRepo.CreateBatch(ctx, modelTrades); err != nil {
 			logger.Error("failed to persist trades",
 				logger.S("order_id", result.OrderID),
 				logger.I("trade_count", len(modelTrades)),
@@ -212,17 +217,24 @@ func (m *Matcher) getOrCreateActor(symbol string) *actor {
 	}
 
 	actCtx, actCancel := context.WithCancel(m.ctx)
+	exitedCh := make(chan struct{})
 	act := &actor{
-		symbol: symbol,
-		cmdCh:  make(chan command, 1000),
-		book:   book.NewOrderBook(symbol),
-		cancel: actCancel,
-		wg:     &sync.WaitGroup{},
+		symbol:   symbol,
+		cmdCh:    make(chan command, 1000),
+		cancelCh: make(chan cancelCommand, 1000),
+		book:     book.NewOrderBook(symbol),
+		cancel:   actCancel,
 	}
 
 	m.actors[symbol] = act
-	m.wg.Add(1)
-	go act.run(actCtx)
+	m.exitedChans[symbol] = exitedCh
+	go func() {
+		act.run(actCtx)
+		close(exitedCh)
+		m.actorsMu.Lock()
+		delete(m.exitedChans, symbol)
+		m.actorsMu.Unlock()
+	}()
 
 	logger.Info("actor started", logger.S("symbol", symbol))
 
@@ -267,18 +279,19 @@ func (m *Matcher) dispatch(ctx context.Context, symbol string, cmd command) (*Ma
 }
 
 // SubmitOrder 提交订单进行撮合
-func (m *Matcher) SubmitOrder(ctx context.Context, orderID string, userID int64, symbol string, side model.OrderSide, price, quantity decimal.Decimal) (*MatchResult, error) {
+func (m *Matcher) SubmitOrder(ctx context.Context, orderID string, userID int64, symbol string, side model.OrderSide, orderType model.OrderType, price, quantity decimal.Decimal) (*MatchResult, error) {
 	if !m.running.Load() {
 		return nil, fmt.Errorf("matching engine is not running")
 	}
 
 	cmd := command{
-		id:     m.counter.Add(1),
-		orderID: orderID,
-		userID:  userID,
-		side:    side,
-		price:   price,
-		qty:     quantity,
+		id:        m.counter.Add(1),
+		orderID:   orderID,
+		userID:    userID,
+		side:      side,
+		orderType: orderType,
+		price:     price,
+		qty:       quantity,
 	}
 
 	result, err := m.dispatch(ctx, symbol, cmd)
@@ -296,6 +309,7 @@ func (m *Matcher) SubmitOrder(ctx context.Context, orderID string, userID int64,
 		logger.S("order_id", orderID),
 		logger.S("symbol", symbol),
 		logger.S("side", string(side)),
+		logger.S("order_type", string(orderType)),
 		logger.S("price", price.String()),
 		logger.S("quantity", quantity.String()),
 		logger.I("trades", len(result.Trades)),
@@ -318,16 +332,41 @@ func (m *Matcher) CancelOrder(symbol, orderID string) bool {
 		return false
 	}
 
-	success := act.book.CancelOrder(orderID)
+	replyCh := make(chan bool, 1)
+	cmd := cancelCommand{
+		orderID: orderID,
+		replyCh: replyCh,
+	}
 
-	if success {
-		logger.Info("order cancelled",
+	ctx, cancel := context.WithTimeout(context.Background(), m.actorTimeout)
+	defer cancel()
+
+	select {
+	case act.cancelCh <- cmd:
+	case <-ctx.Done():
+		logger.Warn("cancel command timeout",
 			logger.S("symbol", symbol),
 			logger.S("order_id", orderID),
 		)
+		return false
 	}
 
-	return success
+	select {
+	case success := <-replyCh:
+		if success {
+			logger.Info("order cancelled",
+				logger.S("symbol", symbol),
+				logger.S("order_id", orderID),
+			)
+		}
+		return success
+	case <-ctx.Done():
+		logger.Warn("cancel command timeout waiting for reply",
+			logger.S("symbol", symbol),
+			logger.S("order_id", orderID),
+		)
+		return false
+	}
 }
 
 // GetOrderBook 获取订单簿快照
@@ -413,21 +452,22 @@ func (m *Matcher) Shutdown() {
 	for _, act := range m.actors {
 		act.cancel()
 	}
+	exitedChans := m.exitedChans
+	m.exitedChans = nil
+	// Keep m.actors non-nil so actor goroutines can safely call delete() inside it.
+	// Nil it only after all actors have exited.
+	m.actorsMu.Unlock()
+
+	// Wait for all actor goroutines to exit by receiving from their done channels.
+	for symbol, ch := range exitedChans {
+		<-ch
+		delete(exitedChans, symbol)
+	}
+
+	m.actorsMu.Lock()
 	m.actors = nil
 	m.actorsMu.Unlock()
 
-	m.wg.Wait()
-	m.notifWg.Wait()
-
-	// Drain the notify channel before closing
-	for {
-		select {
-		case <-m.notify:
-		default:
-			goto closed
-		}
-	}
-closed:
 	close(m.notify)
 
 	logger.Info("matching engine stopped")

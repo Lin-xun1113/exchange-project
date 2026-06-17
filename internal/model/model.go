@@ -59,7 +59,24 @@ type OrderType string
 const (
 	OrderTypeLimit  OrderType = "limit"
 	OrderTypeMarket OrderType = "market"
+	OrderTypeIOC    OrderType = "ioc"
+	OrderTypeFOK    OrderType = "fok"
 )
+
+func (t OrderType) String() string {
+	switch t {
+	case OrderTypeLimit:
+		return "limit"
+	case OrderTypeMarket:
+		return "market"
+	case OrderTypeIOC:
+		return "ioc"
+	case OrderTypeFOK:
+		return "fok"
+	default:
+		return "unknown"
+	}
+}
 
 // OrderStatus 订单状态
 type OrderStatus string

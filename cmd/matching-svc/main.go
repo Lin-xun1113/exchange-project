@@ -79,8 +79,7 @@ func main() {
 
 	// 创建撮合引擎
 	matcher := engine.NewMatcher(engine.Config{
-		Workers:   10,
-		QueueSize: 1000,
+		ActorTimeout: 5 * time.Second,
 	})
 	defer matcher.Shutdown()
 

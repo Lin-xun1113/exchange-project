@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v7.34.1
-// source: matching/v1/matching.proto
+// source: api/proto/matching/v1/matching.proto
 
 package matchingpb
 
@@ -56,11 +56,11 @@ func (x OrderSide) String() string {
 }
 
 func (OrderSide) Descriptor() protoreflect.EnumDescriptor {
-	return file_matching_v1_matching_proto_enumTypes[0].Descriptor()
+	return file_api_proto_matching_v1_matching_proto_enumTypes[0].Descriptor()
 }
 
 func (OrderSide) Type() protoreflect.EnumType {
-	return &file_matching_v1_matching_proto_enumTypes[0]
+	return &file_api_proto_matching_v1_matching_proto_enumTypes[0]
 }
 
 func (x OrderSide) Number() protoreflect.EnumNumber {
@@ -69,7 +69,7 @@ func (x OrderSide) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use OrderSide.Descriptor instead.
 func (OrderSide) EnumDescriptor() ([]byte, []int) {
-	return file_matching_v1_matching_proto_rawDescGZIP(), []int{0}
+	return file_api_proto_matching_v1_matching_proto_rawDescGZIP(), []int{0}
 }
 
 // 订单类型
@@ -112,11 +112,11 @@ func (x OrderType) String() string {
 }
 
 func (OrderType) Descriptor() protoreflect.EnumDescriptor {
-	return file_matching_v1_matching_proto_enumTypes[1].Descriptor()
+	return file_api_proto_matching_v1_matching_proto_enumTypes[1].Descriptor()
 }
 
 func (OrderType) Type() protoreflect.EnumType {
-	return &file_matching_v1_matching_proto_enumTypes[1]
+	return &file_api_proto_matching_v1_matching_proto_enumTypes[1]
 }
 
 func (x OrderType) Number() protoreflect.EnumNumber {
@@ -125,7 +125,7 @@ func (x OrderType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use OrderType.Descriptor instead.
 func (OrderType) EnumDescriptor() ([]byte, []int) {
-	return file_matching_v1_matching_proto_rawDescGZIP(), []int{1}
+	return file_api_proto_matching_v1_matching_proto_rawDescGZIP(), []int{1}
 }
 
 // 交易信息
@@ -146,7 +146,7 @@ type Trade struct {
 
 func (x *Trade) Reset() {
 	*x = Trade{}
-	mi := &file_matching_v1_matching_proto_msgTypes[0]
+	mi := &file_api_proto_matching_v1_matching_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -158,7 +158,7 @@ func (x *Trade) String() string {
 func (*Trade) ProtoMessage() {}
 
 func (x *Trade) ProtoReflect() protoreflect.Message {
-	mi := &file_matching_v1_matching_proto_msgTypes[0]
+	mi := &file_api_proto_matching_v1_matching_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -171,7 +171,7 @@ func (x *Trade) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Trade.ProtoReflect.Descriptor instead.
 func (*Trade) Descriptor() ([]byte, []int) {
-	return file_matching_v1_matching_proto_rawDescGZIP(), []int{0}
+	return file_api_proto_matching_v1_matching_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *Trade) GetTradeId() string {
@@ -249,7 +249,7 @@ type OrderBookEntry struct {
 
 func (x *OrderBookEntry) Reset() {
 	*x = OrderBookEntry{}
-	mi := &file_matching_v1_matching_proto_msgTypes[1]
+	mi := &file_api_proto_matching_v1_matching_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -261,7 +261,7 @@ func (x *OrderBookEntry) String() string {
 func (*OrderBookEntry) ProtoMessage() {}
 
 func (x *OrderBookEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_matching_v1_matching_proto_msgTypes[1]
+	mi := &file_api_proto_matching_v1_matching_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -274,7 +274,7 @@ func (x *OrderBookEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrderBookEntry.ProtoReflect.Descriptor instead.
 func (*OrderBookEntry) Descriptor() ([]byte, []int) {
-	return file_matching_v1_matching_proto_rawDescGZIP(), []int{1}
+	return file_api_proto_matching_v1_matching_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *OrderBookEntry) GetPrice() string {
@@ -311,7 +311,7 @@ type OrderBook struct {
 
 func (x *OrderBook) Reset() {
 	*x = OrderBook{}
-	mi := &file_matching_v1_matching_proto_msgTypes[2]
+	mi := &file_api_proto_matching_v1_matching_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -323,7 +323,7 @@ func (x *OrderBook) String() string {
 func (*OrderBook) ProtoMessage() {}
 
 func (x *OrderBook) ProtoReflect() protoreflect.Message {
-	mi := &file_matching_v1_matching_proto_msgTypes[2]
+	mi := &file_api_proto_matching_v1_matching_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -336,7 +336,7 @@ func (x *OrderBook) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrderBook.ProtoReflect.Descriptor instead.
 func (*OrderBook) Descriptor() ([]byte, []int) {
-	return file_matching_v1_matching_proto_rawDescGZIP(), []int{2}
+	return file_api_proto_matching_v1_matching_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *OrderBook) GetSymbol() string {
@@ -383,7 +383,7 @@ type SubmitOrderRequest struct {
 
 func (x *SubmitOrderRequest) Reset() {
 	*x = SubmitOrderRequest{}
-	mi := &file_matching_v1_matching_proto_msgTypes[3]
+	mi := &file_api_proto_matching_v1_matching_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -395,7 +395,7 @@ func (x *SubmitOrderRequest) String() string {
 func (*SubmitOrderRequest) ProtoMessage() {}
 
 func (x *SubmitOrderRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_matching_v1_matching_proto_msgTypes[3]
+	mi := &file_api_proto_matching_v1_matching_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -408,7 +408,7 @@ func (x *SubmitOrderRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitOrderRequest.ProtoReflect.Descriptor instead.
 func (*SubmitOrderRequest) Descriptor() ([]byte, []int) {
-	return file_matching_v1_matching_proto_rawDescGZIP(), []int{3}
+	return file_api_proto_matching_v1_matching_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *SubmitOrderRequest) GetOrderId() string {
@@ -472,7 +472,7 @@ type SubmitOrderResponse struct {
 
 func (x *SubmitOrderResponse) Reset() {
 	*x = SubmitOrderResponse{}
-	mi := &file_matching_v1_matching_proto_msgTypes[4]
+	mi := &file_api_proto_matching_v1_matching_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -484,7 +484,7 @@ func (x *SubmitOrderResponse) String() string {
 func (*SubmitOrderResponse) ProtoMessage() {}
 
 func (x *SubmitOrderResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_matching_v1_matching_proto_msgTypes[4]
+	mi := &file_api_proto_matching_v1_matching_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -497,7 +497,7 @@ func (x *SubmitOrderResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitOrderResponse.ProtoReflect.Descriptor instead.
 func (*SubmitOrderResponse) Descriptor() ([]byte, []int) {
-	return file_matching_v1_matching_proto_rawDescGZIP(), []int{4}
+	return file_api_proto_matching_v1_matching_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *SubmitOrderResponse) GetSuccess() bool {
@@ -532,7 +532,7 @@ type GetOrderBookRequest struct {
 
 func (x *GetOrderBookRequest) Reset() {
 	*x = GetOrderBookRequest{}
-	mi := &file_matching_v1_matching_proto_msgTypes[5]
+	mi := &file_api_proto_matching_v1_matching_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -544,7 +544,7 @@ func (x *GetOrderBookRequest) String() string {
 func (*GetOrderBookRequest) ProtoMessage() {}
 
 func (x *GetOrderBookRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_matching_v1_matching_proto_msgTypes[5]
+	mi := &file_api_proto_matching_v1_matching_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -557,7 +557,7 @@ func (x *GetOrderBookRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOrderBookRequest.ProtoReflect.Descriptor instead.
 func (*GetOrderBookRequest) Descriptor() ([]byte, []int) {
-	return file_matching_v1_matching_proto_rawDescGZIP(), []int{5}
+	return file_api_proto_matching_v1_matching_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *GetOrderBookRequest) GetSymbol() string {
@@ -584,7 +584,7 @@ type GetOrderBookResponse struct {
 
 func (x *GetOrderBookResponse) Reset() {
 	*x = GetOrderBookResponse{}
-	mi := &file_matching_v1_matching_proto_msgTypes[6]
+	mi := &file_api_proto_matching_v1_matching_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -596,7 +596,7 @@ func (x *GetOrderBookResponse) String() string {
 func (*GetOrderBookResponse) ProtoMessage() {}
 
 func (x *GetOrderBookResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_matching_v1_matching_proto_msgTypes[6]
+	mi := &file_api_proto_matching_v1_matching_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -609,7 +609,7 @@ func (x *GetOrderBookResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOrderBookResponse.ProtoReflect.Descriptor instead.
 func (*GetOrderBookResponse) Descriptor() ([]byte, []int) {
-	return file_matching_v1_matching_proto_rawDescGZIP(), []int{6}
+	return file_api_proto_matching_v1_matching_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *GetOrderBookResponse) GetOrderBook() *OrderBook {
@@ -633,7 +633,7 @@ type GetTradesRequest struct {
 
 func (x *GetTradesRequest) Reset() {
 	*x = GetTradesRequest{}
-	mi := &file_matching_v1_matching_proto_msgTypes[7]
+	mi := &file_api_proto_matching_v1_matching_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -645,7 +645,7 @@ func (x *GetTradesRequest) String() string {
 func (*GetTradesRequest) ProtoMessage() {}
 
 func (x *GetTradesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_matching_v1_matching_proto_msgTypes[7]
+	mi := &file_api_proto_matching_v1_matching_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -658,7 +658,7 @@ func (x *GetTradesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTradesRequest.ProtoReflect.Descriptor instead.
 func (*GetTradesRequest) Descriptor() ([]byte, []int) {
-	return file_matching_v1_matching_proto_rawDescGZIP(), []int{7}
+	return file_api_proto_matching_v1_matching_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *GetTradesRequest) GetSymbol() string {
@@ -708,7 +708,7 @@ type GetTradesResponse struct {
 
 func (x *GetTradesResponse) Reset() {
 	*x = GetTradesResponse{}
-	mi := &file_matching_v1_matching_proto_msgTypes[8]
+	mi := &file_api_proto_matching_v1_matching_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -720,7 +720,7 @@ func (x *GetTradesResponse) String() string {
 func (*GetTradesResponse) ProtoMessage() {}
 
 func (x *GetTradesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_matching_v1_matching_proto_msgTypes[8]
+	mi := &file_api_proto_matching_v1_matching_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -733,7 +733,7 @@ func (x *GetTradesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTradesResponse.ProtoReflect.Descriptor instead.
 func (*GetTradesResponse) Descriptor() ([]byte, []int) {
-	return file_matching_v1_matching_proto_rawDescGZIP(), []int{8}
+	return file_api_proto_matching_v1_matching_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *GetTradesResponse) GetTrades() []*Trade {
@@ -757,11 +757,11 @@ func (x *GetTradesResponse) GetHasMore() bool {
 	return false
 }
 
-var File_matching_v1_matching_proto protoreflect.FileDescriptor
+var File_api_proto_matching_v1_matching_proto protoreflect.FileDescriptor
 
-const file_matching_v1_matching_proto_rawDesc = "" +
+const file_api_proto_matching_v1_matching_proto_rawDesc = "" +
 	"\n" +
-	"\x1amatching/v1/matching.proto\x12\vmatching.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xaf\x02\n" +
+	"$api/proto/matching/v1/matching.proto\x12\vmatching.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xaf\x02\n" +
 	"\x05Trade\x12\x19\n" +
 	"\btrade_id\x18\x01 \x01(\tR\atradeId\x12 \n" +
 	"\fbuy_order_id\x18\x02 \x01(\tR\n" +
@@ -831,20 +831,20 @@ const file_matching_v1_matching_proto_rawDesc = "" +
 	"\tGetTrades\x12\x1d.matching.v1.GetTradesRequest\x1a\x1e.matching.v1.GetTradesResponseBGZEgithub.com/linxun2025/exchange-project/api/gen/matching/v1;matchingpbb\x06proto3"
 
 var (
-	file_matching_v1_matching_proto_rawDescOnce sync.Once
-	file_matching_v1_matching_proto_rawDescData []byte
+	file_api_proto_matching_v1_matching_proto_rawDescOnce sync.Once
+	file_api_proto_matching_v1_matching_proto_rawDescData []byte
 )
 
-func file_matching_v1_matching_proto_rawDescGZIP() []byte {
-	file_matching_v1_matching_proto_rawDescOnce.Do(func() {
-		file_matching_v1_matching_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_matching_v1_matching_proto_rawDesc), len(file_matching_v1_matching_proto_rawDesc)))
+func file_api_proto_matching_v1_matching_proto_rawDescGZIP() []byte {
+	file_api_proto_matching_v1_matching_proto_rawDescOnce.Do(func() {
+		file_api_proto_matching_v1_matching_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_api_proto_matching_v1_matching_proto_rawDesc), len(file_api_proto_matching_v1_matching_proto_rawDesc)))
 	})
-	return file_matching_v1_matching_proto_rawDescData
+	return file_api_proto_matching_v1_matching_proto_rawDescData
 }
 
-var file_matching_v1_matching_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_matching_v1_matching_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
-var file_matching_v1_matching_proto_goTypes = []any{
+var file_api_proto_matching_v1_matching_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_api_proto_matching_v1_matching_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_api_proto_matching_v1_matching_proto_goTypes = []any{
 	(OrderSide)(0),                // 0: matching.v1.OrderSide
 	(OrderType)(0),                // 1: matching.v1.OrderType
 	(*Trade)(nil),                 // 2: matching.v1.Trade
@@ -858,7 +858,7 @@ var file_matching_v1_matching_proto_goTypes = []any{
 	(*GetTradesResponse)(nil),     // 10: matching.v1.GetTradesResponse
 	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
 }
-var file_matching_v1_matching_proto_depIdxs = []int32{
+var file_api_proto_matching_v1_matching_proto_depIdxs = []int32{
 	11, // 0: matching.v1.Trade.created_at:type_name -> google.protobuf.Timestamp
 	3,  // 1: matching.v1.OrderBook.bids:type_name -> matching.v1.OrderBookEntry
 	3,  // 2: matching.v1.OrderBook.asks:type_name -> matching.v1.OrderBookEntry
@@ -881,27 +881,27 @@ var file_matching_v1_matching_proto_depIdxs = []int32{
 	0,  // [0:9] is the sub-list for field type_name
 }
 
-func init() { file_matching_v1_matching_proto_init() }
-func file_matching_v1_matching_proto_init() {
-	if File_matching_v1_matching_proto != nil {
+func init() { file_api_proto_matching_v1_matching_proto_init() }
+func file_api_proto_matching_v1_matching_proto_init() {
+	if File_api_proto_matching_v1_matching_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_matching_v1_matching_proto_rawDesc), len(file_matching_v1_matching_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_matching_v1_matching_proto_rawDesc), len(file_api_proto_matching_v1_matching_proto_rawDesc)),
 			NumEnums:      2,
 			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_matching_v1_matching_proto_goTypes,
-		DependencyIndexes: file_matching_v1_matching_proto_depIdxs,
-		EnumInfos:         file_matching_v1_matching_proto_enumTypes,
-		MessageInfos:      file_matching_v1_matching_proto_msgTypes,
+		GoTypes:           file_api_proto_matching_v1_matching_proto_goTypes,
+		DependencyIndexes: file_api_proto_matching_v1_matching_proto_depIdxs,
+		EnumInfos:         file_api_proto_matching_v1_matching_proto_enumTypes,
+		MessageInfos:      file_api_proto_matching_v1_matching_proto_msgTypes,
 	}.Build()
-	File_matching_v1_matching_proto = out.File
-	file_matching_v1_matching_proto_goTypes = nil
-	file_matching_v1_matching_proto_depIdxs = nil
+	File_api_proto_matching_v1_matching_proto = out.File
+	file_api_proto_matching_v1_matching_proto_goTypes = nil
+	file_api_proto_matching_v1_matching_proto_depIdxs = nil
 }

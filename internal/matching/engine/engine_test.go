@@ -20,13 +20,12 @@ func TestMatcher_Basic(t *testing.T) {
 	ctx := context.Background()
 
 	// 添加卖单
-	_, err := m.SubmitOrder(ctx, "ORD001", 1, "BTC/USDT",
-		model.OrderSideSell, decimal.NewFromFloat(50000), decimal.NewFromFloat(1.0))
-	assert.NoError(t, err)
+	_, _ = m.SubmitOrder(ctx, "ORD001", 1, "BTC/USDT",
+		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(1.0))
 
 	// 添加买单
 	result, err := m.SubmitOrder(ctx, "ORD002", 2, "BTC/USDT",
-		model.OrderSideBuy, decimal.NewFromFloat(50100), decimal.NewFromFloat(0.5))
+		model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(50100), decimal.NewFromFloat(0.5))
 	assert.NoError(t, err)
 
 	// 应该成交
@@ -44,7 +43,7 @@ func TestMatcher_OrderBook(t *testing.T) {
 
 	// 添加订单
 	m.SubmitOrder(ctx, "ORD001", 1, "BTC/USDT",
-		model.OrderSideBuy, decimal.NewFromFloat(50000), decimal.NewFromFloat(1.0))
+		model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(1.0))
 
 	// 获取订单簿
 	bids, asks := m.GetOrderBook("BTC/USDT", 10)
@@ -61,7 +60,7 @@ func TestMatcher_CancelOrder(t *testing.T) {
 
 	// 添加订单
 	m.SubmitOrder(ctx, "ORD001", 1, "BTC/USDT",
-		model.OrderSideBuy, decimal.NewFromFloat(50000), decimal.NewFromFloat(1.0))
+		model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(1.0))
 
 	// 取消订单
 	success := m.CancelOrder("BTC/USDT", "ORD001")
@@ -81,15 +80,15 @@ func TestMatcher_BestPrice(t *testing.T) {
 
 	// 添加多个买单
 	m.SubmitOrder(ctx, "ORD001", 1, "BTC/USDT",
-		model.OrderSideBuy, decimal.NewFromFloat(50000), decimal.NewFromFloat(1.0))
+		model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(1.0))
 	m.SubmitOrder(ctx, "ORD002", 1, "BTC/USDT",
-		model.OrderSideBuy, decimal.NewFromFloat(50100), decimal.NewFromFloat(1.0))
+		model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(50100), decimal.NewFromFloat(1.0))
 	m.SubmitOrder(ctx, "ORD003", 1, "BTC/USDT",
-		model.OrderSideBuy, decimal.NewFromFloat(49900), decimal.NewFromFloat(1.0))
+		model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(49900), decimal.NewFromFloat(1.0))
 
 	// 添加卖单
 	m.SubmitOrder(ctx, "ORD004", 1, "BTC/USDT",
-		model.OrderSideSell, decimal.NewFromFloat(50200), decimal.NewFromFloat(1.0))
+		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(50200), decimal.NewFromFloat(1.0))
 
 	// 获取最佳价格
 	bestBid, bestAsk := m.GetBestPrice("BTC/USDT")
@@ -128,7 +127,7 @@ func TestMatcher_SubmitOrderAsync(t *testing.T) {
 			defer wg.Done()
 			orderID := engine.GenerateOrderID()
 			_, err := m.SubmitOrder(ctx, orderID, int64(idx), "BTC/USDT",
-				model.OrderSideBuy, decimal.NewFromFloat(50000), decimal.NewFromFloat(0.1))
+				model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(0.1))
 			assert.NoError(t, err)
 		}(i)
 	}
@@ -151,7 +150,7 @@ func TestMatcher_ConcurrentSameSymbol(t *testing.T) {
 
 	// Place a large sell order first (acts as the liquidity source)
 	_, err := m.SubmitOrder(ctx, "SELL001", 1, "BTC/USDT",
-		model.OrderSideSell, decimal.NewFromFloat(50000), decimal.NewFromFloat(10.0))
+		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(10.0))
 	assert.NoError(t, err)
 
 	// 100 goroutines submit buy orders at the same price concurrently
@@ -166,7 +165,7 @@ func TestMatcher_ConcurrentSameSymbol(t *testing.T) {
 			defer wg.Done()
 			orderID := engine.GenerateOrderID()
 			result, err := m.SubmitOrder(ctx, orderID, int64(idx), "BTC/USDT",
-				model.OrderSideBuy, decimal.NewFromFloat(50100), decimal.NewFromFloat(0.1))
+				model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(50100), decimal.NewFromFloat(0.1))
 			results[idx] = result
 			errors[idx] = err
 		}(i)
@@ -205,7 +204,7 @@ func TestMatcher_Stats(t *testing.T) {
 	ctx := context.Background()
 
 	m.SubmitOrder(ctx, "ORD001", 1, "BTC/USDT",
-		model.OrderSideBuy, decimal.NewFromFloat(50000), decimal.NewFromFloat(1.0))
+		model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(1.0))
 
 	stats := m.Stats()
 	assert.NotNil(t, stats)

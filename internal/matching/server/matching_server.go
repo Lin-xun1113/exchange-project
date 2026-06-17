@@ -23,9 +23,16 @@ import (
 // MatchingServer matching service gRPC server implementation
 type MatchingServer struct {
 	matchingpb.UnimplementedMatchingServiceServer
-	matcher       *engine.Matcher
-	orderClient   *client.OrderClient
-	tradeRepo     *repository.TradeRepository
+	matcher     *engine.Matcher
+	orderClient *client.OrderClient
+	tradeRepo   *repository.TradeRepository
+}
+
+var orderTypeMap = map[matchingpb.OrderType]model.OrderType{
+	matchingpb.OrderType_ORDER_TYPE_LIMIT:  model.OrderTypeLimit,
+	matchingpb.OrderType_ORDER_TYPE_MARKET: model.OrderTypeMarket,
+	matchingpb.OrderType_ORDER_TYPE_IOC:    model.OrderTypeIOC,
+	matchingpb.OrderType_ORDER_TYPE_FOK:    model.OrderTypeFOK,
 }
 
 // NewMatchingServer creates matching service gRPC server
@@ -61,7 +68,12 @@ func (s *MatchingServer) SubmitOrder(ctx context.Context, req *matchingpb.Submit
 		side = model.OrderSideBuy
 	}
 
-	result, err := s.matcher.SubmitOrder(ctx, req.OrderId, req.UserId, req.Symbol, side, price, quantity)
+	orderType := orderTypeMap[req.OrderType]
+	if orderType == "" {
+		orderType = model.OrderTypeLimit
+	}
+
+	result, err := s.matcher.SubmitOrder(ctx, req.OrderId, req.UserId, req.Symbol, side, orderType, price, quantity)
 	if err != nil {
 		if strings.Contains(err.Error(), "timeout") || err == context.DeadlineExceeded {
 			return nil, status.Error(codes.DeadlineExceeded, err.Error())
@@ -73,6 +85,16 @@ func (s *MatchingServer) SubmitOrder(ctx context.Context, req *matchingpb.Submit
 			zap.Error(err),
 		)
 		return nil, err
+	}
+
+	// FOK: return error if partial fill
+	if orderType == model.OrderTypeFOK && result.Error != nil {
+		return nil, status.Error(codes.InvalidArgument, "FOK requires full fill")
+	}
+
+	// Market: return Unavailable if insufficient liquidity
+	if orderType == model.OrderTypeMarket && result.UnfilledQty.GreaterThan(decimal.Zero) {
+		return nil, status.Error(codes.Unavailable, "insufficient liquidity")
 	}
 
 	// Update order status in Order Service
