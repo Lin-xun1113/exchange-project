@@ -70,7 +70,7 @@ func (s *MatchingServer) SubmitOrder(ctx context.Context, req *matchingpb.Submit
 
 	orderType := orderTypeMap[req.OrderType]
 	if orderType == "" {
-		orderType = model.OrderTypeLimit
+		return nil, status.Errorf(codes.InvalidArgument, "invalid order type: %v, must be one of: limit, market, ioc, fok", req.OrderType)
 	}
 
 	result, err := s.matcher.SubmitOrder(ctx, req.OrderId, req.UserId, req.Symbol, side, orderType, price, quantity)
@@ -78,13 +78,16 @@ func (s *MatchingServer) SubmitOrder(ctx context.Context, req *matchingpb.Submit
 		if strings.Contains(err.Error(), "timeout") || err == context.DeadlineExceeded {
 			return nil, status.Error(codes.DeadlineExceeded, err.Error())
 		}
+		if st, ok := status.FromError(err); ok {
+			return nil, st.Err()
+		}
 		logger.WithContext(ctx).Error("SubmitOrder failed",
 			logger.S("order_id", req.OrderId),
 			logger.I64("user_id", req.UserId),
 			logger.S("symbol", req.Symbol),
 			zap.Error(err),
 		)
-		return nil, err
+		return nil, status.Errorf(codes.Internal, "matching failed: %v", err)
 	}
 
 	// FOK: return error if partial fill
@@ -182,9 +185,9 @@ func (s *MatchingServer) GetTrades(ctx context.Context, req *matchingpb.GetTrade
 
 	offset := 0
 	if req.Cursor != "" {
-		// Parse cursor for pagination (simple offset calculation)
-		if _, err := parseCursor(req.Cursor); err == nil {
-			offset = int(req.Limit)
+		// Parse cursor for pagination (base64 encoded offset)
+		if parsedOffset, err := parseCursor(req.Cursor); err == nil {
+			offset = parsedOffset
 		}
 	}
 

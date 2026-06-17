@@ -170,7 +170,7 @@ type CreateOrderRequest struct {
 	Symbol         string  `json:"symbol" binding:"required"`
 	Side           string  `json:"side" binding:"required,oneof=buy sell"`
 	OrderType      string  `json:"order_type" binding:"omitempty,oneof=limit market ioc fok"`
-	Price          float64 `json:"price" binding:"required,gt=0"`
+	Price          float64 `json:"price"`
 	Quantity       float64 `json:"quantity" binding:"required,gt=0"`
 	IdempotencyKey string  `json:"idempotency_key" binding:"omitempty"`
 }
@@ -188,6 +188,15 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 		response.BadRequest(c, "invalid request: "+err.Error())
 		return
 	}
+
+	// Validate price: limit orders require price > 0
+	if req.OrderType == "" || req.OrderType == "limit" {
+		if req.Price <= 0 {
+			response.BadRequest(c, "price must be greater than 0 for limit orders")
+			return
+		}
+	}
+	// Market, IOC, FOK orders may have price = 0 (no price restriction)
 
 	logger.WithContext(c.Request.Context()).Info("create order",
 		logger.I64("user_id", userID),

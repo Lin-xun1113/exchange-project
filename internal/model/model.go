@@ -31,7 +31,7 @@ type Order struct {
 	UserID         int64     `gorm:"index;not null" json:"user_id"`
 	Symbol         string    `gorm:"type:varchar(32);not null;index" json:"symbol"`
 	Side           string    `gorm:"type:enum('buy','sell');not null" json:"side"`
-	OrderType      string    `gorm:"type:enum('limit','market');default:'limit';not null" json:"order_type"`
+	OrderType      string    `gorm:"type:enum('limit','market','ioc','fok');default:'limit';not null" json:"order_type"`
 	Price          float64   `gorm:"type:decimal(20,8);not null" json:"price"`
 	Quantity       float64   `gorm:"type:decimal(20,8);not null" json:"quantity"`
 	FilledQuantity float64   `gorm:"type:decimal(20,8);default:0;not null" json:"filled_quantity"`

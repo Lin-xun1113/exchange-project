@@ -53,7 +53,7 @@ The `OrderBook.bids` and `OrderBook.asks` fields SHALL be `*SkipList[float64]`, 
 
 ### Requirement: MATCHING-SKIPLIST-003 — Best bid/ask via seek in O(log n)
 
-`GetBestBid()` SHALL call `sl.Seek(math.Inf(+1))` to retrieve the highest-priced bid node in O(log n). `GetBestAsk()` SHALL call `sl.SeekFirst()` (equivalent to `sl.Seek(math.Inf(-1))`) to retrieve the lowest-priced ask node in O(log n). `GetSpread()` SHALL call both and compute the difference.
+`GetBestBid()` SHALL call `sl.SeekLast()` to retrieve the highest-priced bid node in O(log n). `GetBestAsk()` SHALL call `sl.SeekFirst()` (equivalent to `sl.Seek(math.Inf(-1))`) to retrieve the lowest-priced ask node in O(log n). `GetSpread()` SHALL call both and compute the difference.
 
 #### Scenario: GetSpread returns correct value
 

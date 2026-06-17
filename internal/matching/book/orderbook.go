@@ -105,8 +105,8 @@ type PriceLevel struct {
 
 // OrderBook 订单簿
 type OrderBook struct {
-	mu          sync.RWMutex
 	symbol      string
+	mu          sync.RWMutex // protects all fields below during concurrent reads/writes
 	buyOrders   []*OrderInBook // 买单列表，按价格降序
 	sellOrders  []*OrderInBook // 卖单列表，按价格升序
 	bids        *SkipList[float64] // 价格索引：最高买价 = SeekLast()
@@ -128,15 +128,11 @@ func NewOrderBook(symbol string) *OrderBook {
 
 // GetSymbol 返回交易对
 func (ob *OrderBook) GetSymbol() string {
-	ob.mu.RLock()
-	defer ob.mu.RUnlock()
 	return ob.symbol
 }
 
 // AddOrder 添加订单并尝试撮合
 func (ob *OrderBook) AddOrder(order *OrderInBook) (trades []*Trade, err error) {
-	ob.mu.Lock()
-	defer ob.mu.Unlock()
 
 	var tradesList []*Trade
 
@@ -420,7 +416,6 @@ func (ob *OrderBook) cleanupOrdersInternal() {
 func (ob *OrderBook) GetDepth(depth int) (bids []*OrderInBook, asks []*OrderInBook) {
 	ob.mu.RLock()
 	defer ob.mu.RUnlock()
-
 	if depth <= 0 {
 		depth = 10
 	}
@@ -444,7 +439,6 @@ func (ob *OrderBook) GetDepth(depth int) (bids []*OrderInBook, asks []*OrderInBo
 func (ob *OrderBook) GetOrderByID(orderID string) *OrderInBook {
 	ob.mu.RLock()
 	defer ob.mu.RUnlock()
-
 	for _, o := range ob.buyOrders {
 		if o.OrderID == orderID {
 			return o
@@ -460,9 +454,6 @@ func (ob *OrderBook) GetOrderByID(orderID string) *OrderInBook {
 
 // CancelOrder 取消订单
 func (ob *OrderBook) CancelOrder(orderID string) bool {
-	ob.mu.Lock()
-	defer ob.mu.Unlock()
-
 	// 从买单中移除
 	for i, o := range ob.buyOrders {
 		if o.OrderID == orderID {
@@ -517,7 +508,6 @@ func (ob *OrderBook) CancelOrder(orderID string) bool {
 func (ob *OrderBook) GetBestBid() decimal.Decimal {
 	ob.mu.RLock()
 	defer ob.mu.RUnlock()
-
 	if ob.bids.IsEmpty() {
 		return decimal.Zero
 	}
@@ -532,7 +522,6 @@ func (ob *OrderBook) GetBestBid() decimal.Decimal {
 func (ob *OrderBook) GetBestAsk() decimal.Decimal {
 	ob.mu.RLock()
 	defer ob.mu.RUnlock()
-
 	if ob.asks.IsEmpty() {
 		return decimal.Zero
 	}
@@ -545,6 +534,8 @@ func (ob *OrderBook) GetBestAsk() decimal.Decimal {
 
 // GetSpread 获取买卖价差
 func (ob *OrderBook) GetSpread() decimal.Decimal {
+	ob.mu.RLock()
+	defer ob.mu.RUnlock()
 	bid := ob.GetBestBid()
 	ask := ob.GetBestAsk()
 	if bid.IsZero() || ask.IsZero() {
