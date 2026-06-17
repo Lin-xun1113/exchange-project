@@ -1,4 +1,4 @@
-// Package client 提供 gRPC 客户端封装
+// Package client provides gRPC 客户端封装
 package client
 
 import (
@@ -9,7 +9,9 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/retry"
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/timeout"
 	orderpb "github.com/linxun2025/exchange-project/api/gen/order/v1"
+	"github.com/linxun2025/exchange-project/pkg/grpcx"
 	"github.com/linxun2025/exchange-project/pkg/logger"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -29,7 +31,9 @@ func NewOrderClient(addr string) (*OrderClient, error) {
 	conn, err := grpc.Dial(addr,
 		grpc.WithDefaultServiceConfig(`{"loadBalancingPolicy":"round_robin"}`),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 		grpc.WithChainUnaryInterceptor(
+			grpcx.UnaryClientRequestID(),
 			circuitBreakerInterceptor(cb, "order"),
 			logInterceptor,
 			timeout.UnaryClientInterceptor(DefaultTimeout),

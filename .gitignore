@@ -1,0 +1,131 @@
+# ============================================================
+# exchange-project .gitignore
+# Go 微服务 + Docker + IDE 通用规则
+# ============================================================
+
+# ---------- Go 构建产物 ----------
+# 项目根下裸编译出的可执行文件
+# 注意:/ 单独一行会忽略根目录所有未被白名单的内容,这里只针对已知二进制
+/gateway
+/gateway.exe
+/user-svc
+/user-svc.exe
+/order-svc
+/order-svc.exe
+/matching-svc
+/matching-svc.exe
+/server
+/server.exe
+/client
+/client.exe
+
+# 通用 Go 产物
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.prof
+*.cover
+coverage.html
+coverage.txt
+
+# Go 工具链输出
+bin/
+build/
+dist/
+tmp/
+out/
+vendor/
+
+# 多模块工作区
+go.work
+go.work.sum
+
+# ---------- 环境与凭据 ----------
+.env
+.env.local
+.env.*.local
+config.local.yaml
+config.local.yml
+*.local.yaml
+*.local.yml
+secrets.yaml
+secrets.yml
+*.pem
+*.key
+*.crt
+*.p12
+
+# ---------- 日志与运行时数据 ----------
+*.log
+logs/
+*.pid
+
+# 撮合引擎 WAL / Snapshot(见 ROADMAP 阶段 ⑦)
+wal/
+snapshot/
+*.wal
+*.snap
+
+# ---------- Docker / 部署 ----------
+Dockerfile.local
+docker-compose.override.yml
+docker-compose.local.yml
+docker-compose.*.yml
+!docker-compose.yml
+
+# ---------- 编辑器 / IDE ----------
+# VS Code
+.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+
+# GoLand / JetBrains
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Cursor
+.cursor/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# 临时 / 备份
+*.swp
+*.swo
+*.bak
+*.tmp
+*.orig
+*.rej
+
+# ---------- 测试产物 ----------
+*.test
+*.out
+bench/result/
+test-results/
+junit*.xml
+coverage/
+*.coverprofile
+
+
+# ---------- 个人资料 / 隐私文件 ----------
+bybit.md
+RESUME.md
+ROADMAP.md

@@ -2,10 +2,12 @@
 package main
 
 import (
+	"context"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/linxun2025/exchange-project/api/gen/order/v1"
 	"github.com/linxun2025/exchange-project/internal/order/repository"
@@ -13,8 +15,11 @@ import (
 	"github.com/linxun2025/exchange-project/internal/order/service"
 	orderrepo "github.com/linxun2025/exchange-project/internal/user/repository"
 	"github.com/linxun2025/exchange-project/pkg/config"
+	"github.com/linxun2025/exchange-project/pkg/grpcx"
 	"github.com/linxun2025/exchange-project/pkg/logger"
+	"github.com/linxun2025/exchange-project/pkg/tracing"
 	"github.com/go-redis/redis/v8"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -49,6 +54,21 @@ func main() {
 		logger.S("environment", cfg.App.Environment),
 	)
 
+	// 初始化 OpenTelemetry tracing
+	otelEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	tracingShutdown, err := tracing.Init(context.Background(), "order-svc", otelEndpoint)
+	if err != nil {
+		logger.Warn("failed to init tracing", logger.Err(err))
+	} else {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := tracingShutdown(ctx); err != nil {
+				logger.Error("failed to shutdown tracing", logger.Err(err))
+			}
+		}()
+	}
+
 	// 初始化数据库连接
 	db, err := gorm.Open(mysql.Open(cfg.Database.DSN()), &gorm.Config{})
 	if err != nil {
@@ -76,6 +96,8 @@ func main() {
 	}
 
 	grpcServer := grpc.NewServer(
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+		grpc.ChainUnaryInterceptor(grpcx.UnaryServerRequestID()),
 		grpc.MaxConcurrentStreams(grpcMaxConcurrentStreams),
 		grpc.MaxRecvMsgSize(grpcMaxRecvMsgSize),
 		grpc.MaxSendMsgSize(grpcMaxSendMsgSize),

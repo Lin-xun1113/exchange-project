@@ -75,7 +75,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		Password: req.Password,
 	})
 	if err != nil {
-		logger.Error("login failed", logger.Err(err), logger.S("username", req.Username))
+		logger.WithContext(c.Request.Context()).Error("login failed", logger.Err(err), logger.S("username", req.Username))
 		response.Unauthorized(c, "invalid username or password")
 		return
 	}
@@ -83,7 +83,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	// 生成 JWT token
 	token, err := middleware.GenerateToken(loginResp.UserId, loginResp.Username, loginResp.Role, h.jwtSecret, h.expireTime)
 	if err != nil {
-		logger.Error("failed to generate token", logger.Err(err))
+		logger.WithContext(c.Request.Context()).Error("failed to generate token", logger.Err(err))
 		response.InternalServerError(c, "failed to generate token")
 		return
 	}
@@ -121,7 +121,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		InitialBalance: "10000", // 默认初始余额 10000
 	})
 	if err != nil {
-		logger.Error("register failed", logger.Err(err), logger.S("username", req.Username))
+		logger.WithContext(c.Request.Context()).Error("register failed", logger.Err(err), logger.S("username", req.Username))
 		response.InternalServerError(c, "registration failed: "+err.Error())
 		return
 	}
@@ -189,7 +189,7 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 		return
 	}
 
-	logger.Info("create order",
+	logger.WithContext(c.Request.Context()).Info("create order",
 		logger.I64("user_id", userID),
 		logger.S("symbol", req.Symbol),
 		logger.S("side", req.Side),
@@ -207,7 +207,7 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 
 	freezeResp, err := h.clients.User.FreezeAmount(c.Request.Context(), freezeReq)
 	if err != nil {
-		logger.Error("failed to freeze amount", logger.Err(err))
+		logger.WithContext(c.Request.Context()).Error("failed to freeze amount", logger.Err(err))
 		response.InternalServerError(c, "failed to freeze amount")
 		return
 	}
@@ -239,7 +239,7 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 			Amount:  formatDecimal(amount),
 			OrderId: "",
 		})
-		logger.Error("failed to submit order", logger.Err(err))
+		logger.WithContext(c.Request.Context()).Error("failed to submit order", logger.Err(err))
 		response.InternalServerError(c, "failed to submit order")
 		return
 	}
@@ -288,7 +288,7 @@ func (h *OrderHandler) CancelOrder(c *gin.Context) {
 		return
 	}
 
-	logger.Info("cancel order",
+	logger.WithContext(c.Request.Context()).Info("cancel order",
 		logger.I64("user_id", userID),
 		logger.S("order_id", req.OrderID),
 	)
@@ -298,7 +298,7 @@ func (h *OrderHandler) CancelOrder(c *gin.Context) {
 		OrderId: req.OrderID,
 	})
 	if err != nil {
-		logger.Error("failed to get order", logger.Err(err))
+		logger.WithContext(c.Request.Context()).Error("failed to get order", logger.Err(err))
 		response.InternalServerError(c, "failed to get order")
 		return
 	}
@@ -322,7 +322,7 @@ func (h *OrderHandler) CancelOrder(c *gin.Context) {
 		UserId:  userID,
 	})
 	if err != nil {
-		logger.Error("failed to cancel order", logger.Err(err))
+		logger.WithContext(c.Request.Context()).Error("failed to cancel order", logger.Err(err))
 		response.InternalServerError(c, "failed to cancel order")
 		return
 	}
@@ -342,7 +342,7 @@ func (h *OrderHandler) GetOrder(c *gin.Context) {
 		OrderId: orderID,
 	})
 	if err != nil {
-		logger.Error("failed to get order", logger.Err(err))
+		logger.WithContext(c.Request.Context()).Error("failed to get order", logger.Err(err))
 		response.InternalServerError(c, "failed to get order")
 		return
 	}
@@ -354,18 +354,18 @@ func (h *OrderHandler) GetOrder(c *gin.Context) {
 	}
 
 	response.Success(c, gin.H{
-		"order_id":         order.GetOrderId(),
-		"user_id":          order.GetUserId(),
-		"symbol":           order.GetSymbol(),
-		"side":             order.GetSide().String(),
-		"order_type":       order.GetOrderType().String(),
-		"price":            order.GetPrice(),
-		"quantity":         order.GetQuantity(),
-		"filled_quantity":  order.GetFilledQuantity(),
+		"order_id":           order.GetOrderId(),
+		"user_id":            order.GetUserId(),
+		"symbol":            order.GetSymbol(),
+		"side":              order.GetSide().String(),
+		"order_type":        order.GetOrderType().String(),
+		"price":             order.GetPrice(),
+		"quantity":          order.GetQuantity(),
+		"filled_quantity":   order.GetFilledQuantity(),
 		"remaining_quantity": order.GetRemainingQuantity(),
-		"status":           order.GetStatus().String(),
-		"created_at":       order.GetCreatedAt(),
-		"updated_at":       order.GetUpdatedAt(),
+		"status":            order.GetStatus().String(),
+		"created_at":        order.GetCreatedAt(),
+		"updated_at":        order.GetUpdatedAt(),
 	})
 }
 
@@ -386,7 +386,7 @@ func (h *OrderHandler) ListOrders(c *gin.Context) {
 		PageSize: pageSize,
 	})
 	if err != nil {
-		logger.Error("failed to list orders", logger.Err(err))
+		logger.WithContext(c.Request.Context()).Error("failed to list orders", logger.Err(err))
 		response.InternalServerError(c, "failed to list orders")
 		return
 	}
@@ -394,14 +394,14 @@ func (h *OrderHandler) ListOrders(c *gin.Context) {
 	orders := make([]gin.H, 0, len(listResp.GetOrders()))
 	for _, order := range listResp.GetOrders() {
 		orders = append(orders, gin.H{
-			"order_id":          order.GetOrderId(),
-			"symbol":            order.GetSymbol(),
-			"side":              order.GetSide().String(),
-			"price":             order.GetPrice(),
-			"quantity":          order.GetQuantity(),
-			"filled_quantity":   order.GetFilledQuantity(),
-			"status":            order.GetStatus().String(),
-			"created_at":        order.GetCreatedAt(),
+			"order_id":         order.GetOrderId(),
+			"symbol":           order.GetSymbol(),
+			"side":             order.GetSide().String(),
+			"price":            order.GetPrice(),
+			"quantity":         order.GetQuantity(),
+			"filled_quantity":  order.GetFilledQuantity(),
+			"status":           order.GetStatus().String(),
+			"created_at":       order.GetCreatedAt(),
 		})
 	}
 
@@ -429,16 +429,16 @@ func (h *BalanceHandler) GetBalance(c *gin.Context) {
 		UserId: userID,
 	})
 	if err != nil {
-		logger.Error("failed to get balance", logger.Err(err))
+		logger.WithContext(c.Request.Context()).Error("failed to get balance", logger.Err(err))
 		response.InternalServerError(c, "failed to get balance")
 		return
 	}
 
 	response.Success(c, gin.H{
-		"user_id":             balanceResp.GetUserId(),
-		"available_balance":   balanceResp.GetAvailableBalance(),
-		"frozen_balance":     balanceResp.GetFrozenBalance(),
-		"total_balance":      balanceResp.GetTotalBalance(),
+		"user_id":            balanceResp.GetUserId(),
+		"available_balance":  balanceResp.GetAvailableBalance(),
+		"frozen_balance":    balanceResp.GetFrozenBalance(),
+		"total_balance":     balanceResp.GetTotalBalance(),
 	})
 }
 
@@ -471,7 +471,7 @@ func (h *OrderBookHandler) GetOrderBook(c *gin.Context) {
 		Depth:  depth,
 	})
 	if err != nil {
-		logger.Error("failed to get order book", logger.Err(err))
+		logger.WithContext(c.Request.Context()).Error("failed to get order book", logger.Err(err))
 		response.InternalServerError(c, "failed to get order book")
 		return
 	}

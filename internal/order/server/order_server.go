@@ -1,4 +1,4 @@
-// Package server 提供 gRPC 服务端实现
+// Package server provides gRPC service implementation
 package server
 
 import (
@@ -13,30 +13,30 @@ import (
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// OrderServer 订单服务 gRPC 服务端实现
+// OrderServer order service gRPC server implementation
 type OrderServer struct {
 	orderpb.UnimplementedOrderServiceServer
 	svc *service.OrderService
 }
 
-// NewOrderServer 创建订单服务 gRPC 服务端
+// NewOrderServer creates order service gRPC server
 func NewOrderServer(svc *service.OrderService) *OrderServer {
 	return &OrderServer{
 		svc: svc,
 	}
 }
 
-// CreateOrder 创建订单
+// CreateOrder creates order
 func (s *OrderServer) CreateOrder(ctx context.Context, req *orderpb.CreateOrderRequest) (*orderpb.CreateOrderResponse, error) {
 	price, err := decimal.NewFromString(req.Price)
 	if err != nil {
-		logger.Error("invalid price", zap.String("price", req.Price))
+		logger.WithContext(ctx).Error("invalid price", zap.String("price", req.Price))
 		return nil, err
 	}
 
 	quantity, err := decimal.NewFromString(req.Quantity)
 	if err != nil {
-		logger.Error("invalid quantity", zap.String("quantity", req.Quantity))
+		logger.WithContext(ctx).Error("invalid quantity", zap.String("quantity", req.Quantity))
 		return nil, err
 	}
 
@@ -52,7 +52,7 @@ func (s *OrderServer) CreateOrder(ctx context.Context, req *orderpb.CreateOrderR
 
 	order, err := s.svc.CreateOrder(ctx, orderReq)
 	if err != nil {
-		logger.Error("CreateOrder failed",
+		logger.WithContext(ctx).Error("CreateOrder failed",
 			logger.I64("user_id", req.UserId),
 			logger.S("symbol", req.Symbol),
 			zap.Error(err),
@@ -65,11 +65,11 @@ func (s *OrderServer) CreateOrder(ctx context.Context, req *orderpb.CreateOrderR
 	}, nil
 }
 
-// CancelOrder 取消订单
+// CancelOrder cancels order
 func (s *OrderServer) CancelOrder(ctx context.Context, req *orderpb.CancelOrderRequest) (*orderpb.CancelOrderResponse, error) {
 	order, err := s.svc.CancelOrder(ctx, req.OrderId, req.UserId)
 	if err != nil {
-		logger.Error("CancelOrder failed",
+		logger.WithContext(ctx).Error("CancelOrder failed",
 			logger.S("order_id", req.OrderId),
 			logger.I64("user_id", req.UserId),
 			zap.Error(err),
@@ -83,11 +83,11 @@ func (s *OrderServer) CancelOrder(ctx context.Context, req *orderpb.CancelOrderR
 	}, nil
 }
 
-// GetOrder 获取订单
+// GetOrder gets order
 func (s *OrderServer) GetOrder(ctx context.Context, req *orderpb.GetOrderRequest) (*orderpb.GetOrderResponse, error) {
 	order, err := s.svc.GetOrder(ctx, req.OrderId)
 	if err != nil {
-		logger.Error("GetOrder failed", logger.S("order_id", req.OrderId), zap.Error(err))
+		logger.WithContext(ctx).Error("GetOrder failed", logger.S("order_id", req.OrderId), zap.Error(err))
 		return nil, err
 	}
 
@@ -96,12 +96,12 @@ func (s *OrderServer) GetOrder(ctx context.Context, req *orderpb.GetOrderRequest
 	}, nil
 }
 
-// ListOrders 订单列表
+// ListOrders lists orders
 func (s *OrderServer) ListOrders(ctx context.Context, req *orderpb.ListOrdersRequest) (*orderpb.ListOrdersResponse, error) {
 	status := req.Status.String()
 	orders, total, err := s.svc.ListOrders(ctx, req.UserId, req.Symbol, status, int(req.Page), int(req.PageSize))
 	if err != nil {
-		logger.Error("ListOrders failed",
+		logger.WithContext(ctx).Error("ListOrders failed",
 			logger.I64("user_id", req.UserId),
 			logger.S("symbol", req.Symbol),
 			zap.Error(err),
@@ -122,17 +122,17 @@ func (s *OrderServer) ListOrders(ctx context.Context, req *orderpb.ListOrdersReq
 	}, nil
 }
 
-// UpdateOrderStatus 更新订单状态（撮合引擎调用）
+// UpdateOrderStatus updates order status (called by matching engine)
 func (s *OrderServer) UpdateOrderStatus(ctx context.Context, req *orderpb.UpdateOrderStatusRequest) (*orderpb.UpdateOrderStatusResponse, error) {
 	filledQty, err := decimal.NewFromString(req.FilledQuantity)
 	if err != nil {
-		logger.Error("invalid filled_quantity", zap.String("filled_quantity", req.FilledQuantity))
+		logger.WithContext(ctx).Error("invalid filled_quantity", zap.String("filled_quantity", req.FilledQuantity))
 		return nil, err
 	}
 
 	err = s.svc.UpdateFilledQuantity(ctx, req.OrderId, filledQty.InexactFloat64())
 	if err != nil {
-		logger.Error("UpdateOrderStatus failed",
+		logger.WithContext(ctx).Error("UpdateOrderStatus failed",
 			logger.S("order_id", req.OrderId),
 			zap.Error(err),
 		)
@@ -150,7 +150,7 @@ func (s *OrderServer) UpdateOrderStatus(ctx context.Context, req *orderpb.Update
 	}, nil
 }
 
-// modelToProtoOrder 将 model.Order 转换为 proto Order
+// modelToProtoOrder converts model.Order to proto Order
 func modelToProtoOrder(order *model.Order) *orderpb.Order {
 	if order == nil {
 		return nil

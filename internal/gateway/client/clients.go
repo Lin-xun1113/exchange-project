@@ -9,6 +9,7 @@ import (
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/retry"
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/timeout"
+	"github.com/linxun2025/exchange-project/pkg/grpcx"
 	"github.com/linxun2025/exchange-project/pkg/logger"
 	"github.com/linxun2025/exchange-project/pkg/metrics"
 	"github.com/sony/gobreaker"
@@ -132,6 +133,7 @@ func categorizeError(err error) string {
 // 返回拦截器列表供 grpc.WithChainUnaryInterceptor 使用
 func unaryClientInterceptors() []grpc.UnaryClientInterceptor {
 	return []grpc.UnaryClientInterceptor{
+		grpcx.UnaryClientRequestID(),
 		logInterceptor,
 		retry.UnaryClientInterceptor(
 			retry.WithMax(MaxRetries),
@@ -151,7 +153,7 @@ func logInterceptor(
 	invoker grpc.UnaryInvoker,
 	opts ...grpc.CallOption,
 ) error {
-	logger.Debug("gRPC request",
+	logger.WithContext(ctx).Debug("gRPC request",
 		logger.S("method", method),
 		logger.S("target", cc.Target()),
 	)
@@ -160,14 +162,14 @@ func logInterceptor(
 
 	if err != nil {
 		st, _ := status.FromError(err)
-		logger.Error("gRPC request failed",
+		logger.WithContext(ctx).Error("gRPC request failed",
 			logger.S("method", method),
 			logger.S("status", st.Code().String()),
 			logger.S("message", st.Message()),
 			zap.Error(err),
 		)
 	} else {
-		logger.Debug("gRPC request success",
+		logger.WithContext(ctx).Debug("gRPC request success",
 			logger.S("method", method),
 		)
 	}

@@ -1,8 +1,9 @@
-// Package server 提供 gRPC 服务端实现
+// Package server provides gRPC service implementation
 package server
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	matchingpb "github.com/linxun2025/exchange-project/api/gen/matching/v1"
@@ -14,10 +15,12 @@ import (
 	"github.com/linxun2025/exchange-project/pkg/logger"
 	"github.com/shopspring/decimal"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// MatchingServer 撮合服务 gRPC 服务端实现
+// MatchingServer matching service gRPC server implementation
 type MatchingServer struct {
 	matchingpb.UnimplementedMatchingServiceServer
 	matcher       *engine.Matcher
@@ -25,7 +28,7 @@ type MatchingServer struct {
 	tradeRepo     *repository.TradeRepository
 }
 
-// NewMatchingServer 创建撮合服务 gRPC 服务端
+// NewMatchingServer creates matching service gRPC server
 func NewMatchingServer(matcher *engine.Matcher, orderClient *client.OrderClient, tradeRepo *repository.TradeRepository) *MatchingServer {
 	return &MatchingServer{
 		matcher:     matcher,
@@ -34,17 +37,17 @@ func NewMatchingServer(matcher *engine.Matcher, orderClient *client.OrderClient,
 	}
 }
 
-// SubmitOrder 提交订单进行撮合
+// SubmitOrder submits order for matching
 func (s *MatchingServer) SubmitOrder(ctx context.Context, req *matchingpb.SubmitOrderRequest) (*matchingpb.SubmitOrderResponse, error) {
 	price, err := decimal.NewFromString(req.Price)
 	if err != nil {
-		logger.Error("invalid price", zap.String("price", req.Price))
+		logger.WithContext(ctx).Error("invalid price", zap.String("price", req.Price))
 		return nil, err
 	}
 
 	quantity, err := decimal.NewFromString(req.Quantity)
 	if err != nil {
-		logger.Error("invalid quantity", zap.String("quantity", req.Quantity))
+		logger.WithContext(ctx).Error("invalid quantity", zap.String("quantity", req.Quantity))
 		return nil, err
 	}
 
@@ -60,7 +63,10 @@ func (s *MatchingServer) SubmitOrder(ctx context.Context, req *matchingpb.Submit
 
 	result, err := s.matcher.SubmitOrder(ctx, req.OrderId, req.UserId, req.Symbol, side, price, quantity)
 	if err != nil {
-		logger.Error("SubmitOrder failed",
+		if strings.Contains(err.Error(), "timeout") || err == context.DeadlineExceeded {
+			return nil, status.Error(codes.DeadlineExceeded, err.Error())
+		}
+		logger.WithContext(ctx).Error("SubmitOrder failed",
 			logger.S("order_id", req.OrderId),
 			logger.I64("user_id", req.UserId),
 			logger.S("symbol", req.Symbol),
@@ -69,9 +75,9 @@ func (s *MatchingServer) SubmitOrder(ctx context.Context, req *matchingpb.Submit
 		return nil, err
 	}
 
-	// 更新 Order Service 中的订单状态
+	// Update order status in Order Service
 	if s.orderClient != nil {
-		go s.updateOrderStatusAfterMatching(req.OrderId, result)
+		go s.updateOrderStatusAfterMatching(ctx, req.OrderId, result)
 	}
 
 	trades := make([]*matchingpb.Trade, len(result.Trades))
@@ -96,7 +102,7 @@ func (s *MatchingServer) SubmitOrder(ctx context.Context, req *matchingpb.Submit
 	}, nil
 }
 
-// GetOrderBook 获取订单簿快照
+// GetOrderBook gets order book snapshot
 func (s *MatchingServer) GetOrderBook(ctx context.Context, req *matchingpb.GetOrderBookRequest) (*matchingpb.GetOrderBookResponse, error) {
 	depth := int(req.Depth)
 	if depth <= 0 {
@@ -133,10 +139,10 @@ func (s *MatchingServer) GetOrderBook(ctx context.Context, req *matchingpb.GetOr
 	}, nil
 }
 
-// GetTrades 获取交易历史
+// GetTrades gets trade history
 func (s *MatchingServer) GetTrades(ctx context.Context, req *matchingpb.GetTradesRequest) (*matchingpb.GetTradesResponse, error) {
 	if s.tradeRepo == nil {
-		logger.Error("trade repository not initialized")
+		logger.WithContext(ctx).Error("trade repository not initialized")
 		return &matchingpb.GetTradesResponse{
 			Trades:      []*matchingpb.Trade{},
 			NextCursor: "",
@@ -174,7 +180,7 @@ func (s *MatchingServer) GetTrades(ctx context.Context, req *matchingpb.GetTrade
 	}
 
 	if err != nil {
-		logger.Error("failed to get trades",
+		logger.WithContext(ctx).Error("failed to get trades",
 			logger.S("symbol", req.Symbol),
 			logger.I64("user_id", req.UserId),
 			logger.S("order_id", req.OrderId),
@@ -294,21 +300,21 @@ func encodeBase64(data []byte) string {
 	return result
 }
 
-// updateOrderStatusAfterMatching 撮合成功后异步更新订单状态
-func (s *MatchingServer) updateOrderStatusAfterMatching(orderID string, result *engine.MatchResult) {
+// updateOrderStatusAfterMatching updates order status after matching
+func (s *MatchingServer) updateOrderStatusAfterMatching(ctx context.Context, orderID string, result *engine.MatchResult) {
 	if result.Remaining.IsZero() {
-		// 完全成交
-		if err := s.orderClient.UpdateOrderStatus(orderID, orderpb.OrderStatus_ORDER_STATUS_FILLED, result.Remaining.String()); err != nil {
-			logger.Error("failed to update order status to FILLED",
+		// Fully filled
+		if err := s.orderClient.UpdateOrderStatus(ctx, orderID, orderpb.OrderStatus_ORDER_STATUS_FILLED, result.Remaining.String()); err != nil {
+			logger.WithContext(ctx).Error("failed to update order status to FILLED",
 				logger.S("order_id", orderID),
 				logger.Err(err),
 			)
 		}
 	} else if !result.Remaining.IsZero() && len(result.Trades) > 0 {
-		// 部分成交
+		// Partially filled
 		filledQty := decimal.Zero.Sub(result.Remaining).String()
-		if err := s.orderClient.UpdateOrderStatus(orderID, orderpb.OrderStatus_ORDER_STATUS_PARTIAL_FILLED, filledQty); err != nil {
-			logger.Error("failed to update order status to PARTIAL_FILLED",
+		if err := s.orderClient.UpdateOrderStatus(ctx, orderID, orderpb.OrderStatus_ORDER_STATUS_PARTIAL_FILLED, filledQty); err != nil {
+			logger.WithContext(ctx).Error("failed to update order status to PARTIAL_FILLED",
 				logger.S("order_id", orderID),
 				logger.Err(err),
 			)

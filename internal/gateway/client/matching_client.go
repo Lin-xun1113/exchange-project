@@ -1,4 +1,4 @@
-// Package client 提供 gRPC 客户端封装
+// Package client provides gRPC 客户端封装
 package client
 
 import (
@@ -7,9 +7,11 @@ import (
 	"time"
 
 	matchingpb "github.com/linxun2025/exchange-project/api/gen/matching/v1"
+	"github.com/linxun2025/exchange-project/pkg/grpcx"
 	"github.com/linxun2025/exchange-project/pkg/logger"
 	"github.com/linxun2025/exchange-project/pkg/metrics"
 	"github.com/sony/gobreaker"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -31,7 +33,9 @@ func NewMatchingClient(addr string) (*MatchingClient, error) {
 	conn, err := grpc.Dial(addr,
 		grpc.WithDefaultServiceConfig(`{"loadBalancingPolicy":"round_robin"}`),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 		grpc.WithChainUnaryInterceptor(
+			grpcx.UnaryClientRequestID(),
 			matchingCircuitBreakerInterceptor(cb, "matching"),
 			matchingLogInterceptor,
 		),
@@ -83,7 +87,7 @@ func matchingCircuitBreakerInterceptor(cb *CircuitBreaker, clientName string) gr
 			return err
 		}
 
-		logger.Debug("gRPC client request",
+		logger.WithContext(ctx).Debug("gRPC client request",
 			logger.S("client", clientName),
 			logger.S("method", method),
 			logger.S("status", statusStr),
@@ -104,7 +108,7 @@ func matchingLogInterceptor(
 	invoker grpc.UnaryInvoker,
 	opts ...grpc.CallOption,
 ) error {
-	logger.Debug("gRPC request",
+	logger.WithContext(ctx).Debug("gRPC request",
 		logger.S("method", method),
 		logger.S("target", cc.Target()),
 	)
@@ -113,14 +117,14 @@ func matchingLogInterceptor(
 
 	if err != nil {
 		st, _ := status.FromError(err)
-		logger.Error("gRPC request failed",
+		logger.WithContext(ctx).Error("gRPC request failed",
 			logger.S("method", method),
 			logger.S("status", st.Code().String()),
 			logger.S("message", st.Message()),
 			zap.Error(err),
 		)
 	} else {
-		logger.Debug("gRPC request success",
+		logger.WithContext(ctx).Debug("gRPC request success",
 			logger.S("method", method),
 		)
 	}

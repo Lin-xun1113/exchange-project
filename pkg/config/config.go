@@ -115,14 +115,14 @@ type ServiceConfig struct {
 func Load(configPath string) (*Config, error) {
 	// 优先从环境变量覆盖
 	cfg := &Config{}
-	
+
 	// 读取环境变量并覆盖
 	cfg.App.Name = getEnv("APP_NAME", "exchange-project")
 	cfg.App.Environment = getEnv("APP_ENVIRONMENT", "development")
 	cfg.App.Version = getEnv("APP_VERSION", "v1.0.0")
 
 	cfg.Database.Host = getEnv("DB_HOST", "localhost")
-	cfg.Database.Port = getEnvInt("DB_PORT", 3306)
+	cfg.Database.Port = getEnvInt("DB_PORT", 3308)
 	cfg.Database.Username = getEnv("DB_USERNAME", "root")
 	cfg.Database.Password = getEnv("DB_PASSWORD", "password")
 	cfg.Database.Database = getEnv("DB_DATABASE", "exchange")
@@ -139,7 +139,7 @@ func Load(configPath string) (*Config, error) {
 	cfg.JWT.Secret = getEnv("JWT_SECRET", "")
 	if cfg.JWT.Secret == "" {
 		cfg.JWT.Secret = generateSecureSecret(32)
-		logger.Warn("JWT_SECRET not set, generated a random secret at startup. "+
+		logger.Warn("JWT_SECRET not set, generated a random secret at startup. " +
 			"This secret will be different on each restart. Set JWT_SECRET environment variable for production.")
 	} else if cfg.JWT.Secret == "your-secret-key-change-in-production" ||
 		strings.HasPrefix(cfg.JWT.Secret, "your-") {
@@ -187,7 +187,7 @@ func LoadDefault() *Config {
 		},
 		Database: DatabaseConfig{
 			Host:         "localhost",
-			Port:         3306,
+			Port:         3308,
 			Username:     "root",
 			Password:     "password",
 			Database:     "exchange",
@@ -207,11 +207,11 @@ func LoadDefault() *Config {
 			ExpireTime: 24,
 		},
 		Logging: LoggingConfig{
-			Level:     "info",
-			Directory: "./logs",
-			MaxSize:   100,
+			Level:      "info",
+			Directory:  "./logs",
+			MaxSize:    100,
 			MaxBackups: 7,
-			MaxAge:    30,
+			MaxAge:     30,
 		},
 	}
 }

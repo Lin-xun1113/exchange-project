@@ -38,7 +38,6 @@ type OrderInBook struct {
 	RemainingQty   decimal.Decimal `json:"remaining_quantity"`
 	Status         model.OrderStatus `json:"status"`
 	CreatedAt      int64           `json:"created_at"` // 纳秒时间戳，用于 FIFO
-	mu             sync.Mutex      // 保护并发访问
 }
 
 // NewOrderInBook 从订单创建订单簿订单
@@ -58,11 +57,8 @@ func NewOrderInBook(id int64, orderID string, userID int64, symbol string, side 
 	}
 }
 
-// Fill 成交（带锁保护）
+// Fill 成交
 func (o *OrderInBook) Fill(qty decimal.Decimal) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-
 	o.FilledQuantity = o.FilledQuantity.Add(qty)
 	o.RemainingQty = o.RemainingQty.Sub(qty)
 	if o.RemainingQty.IsZero() {

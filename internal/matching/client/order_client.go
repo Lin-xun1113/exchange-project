@@ -10,7 +10,9 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/retry"
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/timeout"
 	orderpb "github.com/linxun2025/exchange-project/api/gen/order/v1"
+	"github.com/linxun2025/exchange-project/pkg/grpcx"
 	"github.com/linxun2025/exchange-project/pkg/logger"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -32,7 +34,9 @@ type OrderClient struct {
 func NewOrderClient(addr string) (*OrderClient, error) {
 	conn, err := grpc.Dial(addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 		grpc.WithChainUnaryInterceptor(
+			grpcx.UnaryClientRequestID(),
 			retry.UnaryClientInterceptor(
 				retry.WithMax(MaxRetries),
 				retry.WithBackoff(retry.BackoffExponential(100*time.Millisecond)),
@@ -67,13 +71,13 @@ func interceptorLogger() logging.Logger {
 		}
 		switch level {
 		case logging.LevelDebug:
-			logger.Debug(msg, zapFields...)
+			logger.WithContext(ctx).Debug(msg, zapFields...)
 		case logging.LevelInfo:
-			logger.Info(msg, zapFields...)
+			logger.WithContext(ctx).Info(msg, zapFields...)
 		case logging.LevelWarn:
-			logger.Warn(msg, zapFields...)
+			logger.WithContext(ctx).Warn(msg, zapFields...)
 		case logging.LevelError:
-			logger.Error(msg, zapFields...)
+			logger.WithContext(ctx).Error(msg, zapFields...)
 		}
 	})
 }
@@ -87,8 +91,8 @@ func (c *OrderClient) Close() error {
 }
 
 // UpdateOrderStatus updates order status after matching
-func (c *OrderClient) UpdateOrderStatus(orderID string, status orderpb.OrderStatus, filledQuantity string) error {
-	_, err := c.client.UpdateOrderStatus(context.Background(), &orderpb.UpdateOrderStatusRequest{
+func (c *OrderClient) UpdateOrderStatus(ctx context.Context, orderID string, status orderpb.OrderStatus, filledQuantity string) error {
+	_, err := c.client.UpdateOrderStatus(ctx, &orderpb.UpdateOrderStatusRequest{
 		OrderId:         orderID,
 		Status:          status,
 		FilledQuantity:  filledQuantity,

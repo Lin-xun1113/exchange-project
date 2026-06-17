@@ -13,6 +13,9 @@ import (
 
 type contextKey string
 
+// RequestIDKey is the context key used to store and retrieve request IDs.
+// It is used by both the logger package and the grpcx package (for server-side
+// interceptor propagation). Single source of truth — do not create a duplicate.
 const (
 	RequestIDKey contextKey = "request_id"
 	TraceIDKey   contextKey = "trace_id"
@@ -87,6 +90,11 @@ func WithContext(ctx context.Context) *zap.Logger {
 // NewContextWithRequestID 创建带 request_id 的 context
 func NewContextWithRequestID(ctx context.Context) context.Context {
 	requestID := uuid.New().String()
+	return context.WithValue(ctx, RequestIDKey, requestID)
+}
+
+// WithRequestID 返回带 request_id 的 context（供 gRPC 服务端拦截器使用）
+func WithRequestID(ctx context.Context, requestID string) context.Context {
 	return context.WithValue(ctx, RequestIDKey, requestID)
 }
 

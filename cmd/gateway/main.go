@@ -13,6 +13,7 @@ import (
 	"github.com/linxun2025/exchange-project/internal/gateway/router"
 	"github.com/linxun2025/exchange-project/pkg/config"
 	"github.com/linxun2025/exchange-project/pkg/logger"
+	"github.com/linxun2025/exchange-project/pkg/tracing"
 	"go.uber.org/zap"
 )
 
@@ -33,6 +34,21 @@ func main() {
 		logger.S("name", cfg.App.Name),
 		logger.S("environment", cfg.App.Environment),
 	)
+
+	// 初始化 OpenTelemetry tracing
+	otelEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	tracingShutdown, err := tracing.Init(context.Background(), "gateway", otelEndpoint)
+	if err != nil {
+		logger.Warn("failed to init tracing", logger.Err(err))
+	} else {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := tracingShutdown(ctx); err != nil {
+				logger.Error("failed to shutdown tracing", logger.Err(err))
+			}
+		}()
+	}
 
 	// 初始化 gRPC 客户端
 	clients, err := client.NewClients(&client.Config{

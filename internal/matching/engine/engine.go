@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/linxun2025/exchange-project/internal/matching/book"
-	"github.com/linxun2025/exchange-project/internal/matching/workerpool"
 	"github.com/linxun2025/exchange-project/internal/model"
 	"github.com/linxun2025/exchange-project/internal/notify/consumer"
 	"github.com/linxun2025/exchange-project/pkg/logger"
@@ -25,16 +24,18 @@ type PublisherInterface interface {
 
 // Matcher 撮合引擎
 type Matcher struct {
-	mu        sync.RWMutex
-	books     map[string]*book.OrderBook // symbol -> OrderBook
-	workers   *workerpool.WorkerPool
-	tradeRepo TradeRepositoryInterface
-	publisher PublisherInterface
-	notify    chan *MatchResult
-	ctx       context.Context
-	cancel    context.CancelFunc
-	running   atomic.Bool
-	counter   atomic.Int64
+	actorsMu     sync.Mutex
+	actors       map[string]*actor
+	wg           sync.WaitGroup
+	notifWg      sync.WaitGroup
+	actorTimeout time.Duration
+	tradeRepo    TradeRepositoryInterface
+	publisher    PublisherInterface
+	notify       chan *MatchResult
+	ctx          context.Context
+	cancel       context.CancelFunc
+	running      atomic.Bool
+	counter      atomic.Int64
 }
 
 // TradeRepositoryInterface 交易记录仓储接口（便于测试 Mock）
@@ -54,41 +55,32 @@ type MatchResult struct {
 
 // Config 撮合引擎配置
 type Config struct {
-	Workers   int
-	QueueSize int
+	ActorTimeout time.Duration
 }
 
 // NewMatcher 创建撮合引擎
 func NewMatcher(cfg Config) *Matcher {
-	if cfg.Workers <= 0 {
-		cfg.Workers = 10
-	}
-	if cfg.QueueSize <= 0 {
-		cfg.QueueSize = 1000
+	if cfg.ActorTimeout <= 0 {
+		cfg.ActorTimeout = 5 * time.Second
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	m := &Matcher{
-		books: make(map[string]*book.OrderBook),
-		workers: workerpool.New(workerpool.Config{
-			Workers:   cfg.Workers,
-			QueueSize: cfg.QueueSize,
-			Name:      "matching-engine",
-		}),
-		notify:  make(chan *MatchResult, 10000),
-		ctx:    ctx,
-		cancel: cancel,
+		actors:       make(map[string]*actor),
+		actorTimeout: cfg.ActorTimeout,
+		notify:        make(chan *MatchResult, 10000),
+		ctx:           ctx,
+		cancel:        cancel,
 	}
 
 	m.running.Store(true)
 
-	// 启动通知处理协程
+	m.notifWg.Add(1)
 	go m.processNotifications()
 
 	logger.Info("matching engine created",
-		logger.I("workers", cfg.Workers),
-		logger.I("queue_size", cfg.QueueSize),
+		logger.S("actor_timeout", cfg.ActorTimeout.String()),
 	)
 
 	return m
@@ -96,15 +88,11 @@ func NewMatcher(cfg Config) *Matcher {
 
 // SetTradeRepo 设置交易记录仓储
 func (m *Matcher) SetTradeRepo(repo TradeRepositoryInterface) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.tradeRepo = repo
 }
 
 // SetPublisher 设置事件发布者
 func (m *Matcher) SetPublisher(publisher PublisherInterface) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.publisher = publisher
 }
 
@@ -117,6 +105,7 @@ func NewMatcherWithTradeRepo(cfg Config, tradeRepo TradeRepositoryInterface) *Ma
 
 // processNotifications 处理撮合通知
 func (m *Matcher) processNotifications() {
+	defer m.notifWg.Done()
 	for {
 		select {
 		case <-m.ctx.Done():
@@ -128,10 +117,7 @@ func (m *Matcher) processNotifications() {
 				logger.S("remaining", result.Remaining.String()),
 			)
 
-			// 持久化交易记录
 			m.persistTrades(result)
-
-			// 发布交易事件通知
 			m.publishTrades(result)
 		}
 	}
@@ -142,10 +128,6 @@ func (m *Matcher) publishTrades(result *MatchResult) {
 	if m.publisher == nil || len(result.Trades) == 0 {
 		return
 	}
-
-	m.mu.RLock()
-	publisher := m.publisher
-	m.mu.RUnlock()
 
 	for _, t := range result.Trades {
 		tradeEvent := &consumer.TradeEvent{
@@ -171,7 +153,7 @@ func (m *Matcher) publishTrades(result *MatchResult) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
-			if err := publisher.Publish(ctx, "trade", e); err != nil {
+			if err := m.publisher.Publish(ctx, "trade", e); err != nil {
 				logger.Error("failed to publish trade event",
 					logger.S("trade_id", tradeEvent.TradeID),
 					logger.Err(err),
@@ -187,11 +169,6 @@ func (m *Matcher) persistTrades(result *MatchResult) {
 		return
 	}
 
-	m.mu.RLock()
-	tradeRepo := m.tradeRepo
-	m.mu.RUnlock()
-
-	// 转换 book.Trade 为 model.Trade
 	modelTrades := make([]*model.Trade, 0, len(result.Trades))
 	for _, t := range result.Trades {
 		modelTrades = append(modelTrades, &model.Trade{
@@ -206,12 +183,11 @@ func (m *Matcher) persistTrades(result *MatchResult) {
 		})
 	}
 
-	// 异步写入数据库（不阻塞撮合流程）
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if err := tradeRepo.CreateBatch(ctx, modelTrades); err != nil {
+		if err := m.tradeRepo.CreateBatch(ctx, modelTrades); err != nil {
 			logger.Error("failed to persist trades",
 				logger.S("order_id", result.OrderID),
 				logger.I("trade_count", len(modelTrades)),
@@ -226,21 +202,68 @@ func (m *Matcher) persistTrades(result *MatchResult) {
 	}()
 }
 
-// GetOrCreateOrderBook 获取或创建订单簿
-func (m *Matcher) GetOrCreateOrderBook(symbol string) *book.OrderBook {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+// getOrCreateActor lazily creates and starts an actor goroutine for the given symbol.
+func (m *Matcher) getOrCreateActor(symbol string) *actor {
+	m.actorsMu.Lock()
+	defer m.actorsMu.Unlock()
 
-	if ob, ok := m.books[symbol]; ok {
-		return ob
+	if act, ok := m.actors[symbol]; ok {
+		return act
 	}
 
-	ob := book.NewOrderBook(symbol)
-	m.books[symbol] = ob
+	actCtx, actCancel := context.WithCancel(m.ctx)
+	act := &actor{
+		symbol: symbol,
+		cmdCh:  make(chan command, 1000),
+		book:   book.NewOrderBook(symbol),
+		cancel: actCancel,
+		wg:     &sync.WaitGroup{},
+	}
 
-	logger.Info("order book created", logger.S("symbol", symbol))
+	m.actors[symbol] = act
+	m.wg.Add(1)
+	go act.run(actCtx)
 
-	return ob
+	logger.Info("actor started", logger.S("symbol", symbol))
+
+	return act
+}
+
+// dispatch sends a command to the symbol's actor and waits for a result.
+func (m *Matcher) dispatch(ctx context.Context, symbol string, cmd command) (*MatchResult, error) {
+	if !m.running.Load() {
+		return nil, fmt.Errorf("matching engine is not running")
+	}
+
+	act := m.getOrCreateActor(symbol)
+
+	timeout := m.actorTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining > 0 && remaining < timeout {
+			timeout = remaining
+		}
+	}
+
+	resultCh := make(chan *MatchResult, 1)
+	cmd.replyCh = resultCh
+
+	select {
+	case act.cmdCh <- cmd:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("matching timeout")
+	}
+
+	select {
+	case result := <-resultCh:
+		return result, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("matching timeout")
+	}
 }
 
 // SubmitOrder 提交订单进行撮合
@@ -249,33 +272,20 @@ func (m *Matcher) SubmitOrder(ctx context.Context, orderID string, userID int64,
 		return nil, fmt.Errorf("matching engine is not running")
 	}
 
-	// 获取或创建订单簿
-	ob := m.GetOrCreateOrderBook(symbol)
-
-	// 创建订单
-	order := book.NewOrderInBook(
-		m.counter.Add(1),
-		orderID,
-		userID,
-		symbol,
-		side,
-		price,
-		quantity,
-	)
-
-	// 添加订单进行撮合
-	trades := ob.AddOrder(order)
-
-	// 构建结果
-	result := &MatchResult{
-		OrderID:   orderID,
-		Trades:    trades,
-		Remaining: order.RemainingQty,
-		Status:    string(order.Status),
-		Timestamp: time.Now(),
+	cmd := command{
+		id:     m.counter.Add(1),
+		orderID: orderID,
+		userID:  userID,
+		side:    side,
+		price:   price,
+		qty:     quantity,
 	}
 
-	// 发送通知
+	result, err := m.dispatch(ctx, symbol, cmd)
+	if err != nil {
+		return nil, err
+	}
+
 	select {
 	case m.notify <- result:
 	default:
@@ -288,25 +298,27 @@ func (m *Matcher) SubmitOrder(ctx context.Context, orderID string, userID int64,
 		logger.S("side", string(side)),
 		logger.S("price", price.String()),
 		logger.S("quantity", quantity.String()),
-		logger.I("trades", len(trades)),
-		logger.S("remaining", order.RemainingQty.String()),
+		logger.I("trades", len(result.Trades)),
+		logger.S("remaining", result.Remaining.String()),
 	)
 
 	return result, nil
 }
 
-// SubmitOrderAsync 异步提交订单
-func (m *Matcher) SubmitOrderAsync(ctx context.Context, orderID string, userID int64, symbol string, side model.OrderSide, price, quantity decimal.Decimal) error {
-	return m.workers.SubmitWithContext(ctx, func() error {
-		_, err := m.SubmitOrder(ctx, orderID, userID, symbol, side, price, quantity)
-		return err
-	})
-}
-
 // CancelOrder 取消订单
 func (m *Matcher) CancelOrder(symbol, orderID string) bool {
-	ob := m.GetOrCreateOrderBook(symbol)
-	success := ob.CancelOrder(orderID)
+	if !m.running.Load() {
+		return false
+	}
+
+	m.actorsMu.Lock()
+	act, ok := m.actors[symbol]
+	m.actorsMu.Unlock()
+	if !ok {
+		return false
+	}
+
+	success := act.book.CancelOrder(orderID)
 
 	if success {
 		logger.Info("order cancelled",
@@ -320,26 +332,66 @@ func (m *Matcher) CancelOrder(symbol, orderID string) bool {
 
 // GetOrderBook 获取订单簿快照
 func (m *Matcher) GetOrderBook(symbol string, depth int) (bids, asks []*book.OrderInBook) {
-	ob := m.GetOrCreateOrderBook(symbol)
-	return ob.GetDepth(depth)
+	if !m.running.Load() {
+		return nil, nil
+	}
+
+	m.actorsMu.Lock()
+	act, ok := m.actors[symbol]
+	m.actorsMu.Unlock()
+	if !ok {
+		return nil, nil
+	}
+
+	return act.book.GetDepth(depth)
 }
 
 // GetBestPrice 获取最佳买卖价
 func (m *Matcher) GetBestPrice(symbol string) (bestBid, bestAsk decimal.Decimal) {
-	ob := m.GetOrCreateOrderBook(symbol)
-	return ob.GetBestBid(), ob.GetBestAsk()
+	if !m.running.Load() {
+		return decimal.Zero, decimal.Zero
+	}
+
+	m.actorsMu.Lock()
+	act, ok := m.actors[symbol]
+	m.actorsMu.Unlock()
+	if !ok {
+		return decimal.Zero, decimal.Zero
+	}
+
+	return act.book.GetBestBid(), act.book.GetBestAsk()
 }
 
 // GetSpread 获取价差
 func (m *Matcher) GetSpread(symbol string) decimal.Decimal {
-	ob := m.GetOrCreateOrderBook(symbol)
-	return ob.GetSpread()
+	if !m.running.Load() {
+		return decimal.Zero
+	}
+
+	m.actorsMu.Lock()
+	act, ok := m.actors[symbol]
+	m.actorsMu.Unlock()
+	if !ok {
+		return decimal.Zero
+	}
+
+	return act.book.GetSpread()
 }
 
 // GetOrder 获取订单信息
 func (m *Matcher) GetOrder(symbol, orderID string) *book.OrderInBook {
-	ob := m.GetOrCreateOrderBook(symbol)
-	return ob.GetOrderByID(orderID)
+	if !m.running.Load() {
+		return nil
+	}
+
+	m.actorsMu.Lock()
+	act, ok := m.actors[symbol]
+	m.actorsMu.Unlock()
+	if !ok {
+		return nil
+	}
+
+	return act.book.GetOrderByID(orderID)
 }
 
 // Subscribe 订阅撮合结果
@@ -355,27 +407,35 @@ func (m *Matcher) Shutdown() {
 
 	logger.Info("shutting down matching engine")
 
-	// 取消上下文
 	m.cancel()
 
-	// 关闭 worker pool
-	m.workers.Shutdown()
+	m.actorsMu.Lock()
+	for _, act := range m.actors {
+		act.cancel()
+	}
+	m.actors = nil
+	m.actorsMu.Unlock()
+
+	m.wg.Wait()
+	m.notifWg.Wait()
+
+	// Drain the notify channel before closing
+	for {
+		select {
+		case <-m.notify:
+		default:
+			goto closed
+		}
+	}
+closed:
+	close(m.notify)
 
 	logger.Info("matching engine stopped")
 }
 
 // ShutdownNow 立即关闭
 func (m *Matcher) ShutdownNow() {
-	if !m.running.CompareAndSwap(true, false) {
-		return
-	}
-
-	logger.Info("shutting down matching engine immediately")
-
-	m.cancel()
-	m.workers.ShutdownNow()
-
-	logger.Info("matching engine stopped immediately")
+	m.Shutdown()
 }
 
 // IsRunning 检查是否运行中
@@ -385,13 +445,13 @@ func (m *Matcher) IsRunning() bool {
 
 // Stats 返回统计信息
 func (m *Matcher) Stats() map[string]interface{} {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	stats := make(map[string]interface{})
 	stats["running"] = m.running.Load()
-	stats["symbols"] = len(m.books)
-	stats["worker_pool"] = m.workers.GetMetrics()
+
+	m.actorsMu.Lock()
+	symbolCount := len(m.actors)
+	m.actorsMu.Unlock()
+	stats["symbols"] = symbolCount
 
 	return stats
 }

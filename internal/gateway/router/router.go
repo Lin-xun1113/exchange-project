@@ -10,18 +10,23 @@ import (
 	"github.com/linxun2025/exchange-project/internal/gateway/middleware"
 	"github.com/linxun2025/exchange-project/pkg/config"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
 
 // Config 路由配置
 type Config struct {
-	JWTConfig middleware.JWTConfig
-	Clients   *client.Clients
+	JWTConfig   middleware.JWTConfig
+	Clients     *client.Clients
+	ServiceName string
 }
 
 // Setup 设置路由
 func Setup(r *gin.Engine, cfg *Config) {
 	// 全局中间件
 	r.Use(middleware.RequestID())
+	if cfg.ServiceName != "" {
+		r.Use(otelgin.Middleware(cfg.ServiceName))
+	}
 	r.Use(middleware.Recovery())
 	r.Use(middleware.AccessLog())
 	r.Use(middleware.CORS())
@@ -93,7 +98,8 @@ func NewRouter(cfg *config.Config, clients *client.Clients) *gin.Engine {
 			Secret:     cfg.JWT.Secret,
 			ExpireTime: cfg.JWT.GetExpireDuration(),
 		},
-		Clients: clients,
+		Clients:     clients,
+		ServiceName: cfg.App.Name,
 	})
 
 	return r

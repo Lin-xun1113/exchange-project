@@ -3,8 +3,8 @@ package engine_test
 
 import (
 	"context"
+	"sync"
 	"testing"
-	"time"
 
 	"github.com/linxun2025/exchange-project/internal/matching/engine"
 	"github.com/linxun2025/exchange-project/internal/model"
@@ -14,10 +14,7 @@ import (
 
 // TestMatcher_Basic 测试撮合引擎基本功能
 func TestMatcher_Basic(t *testing.T) {
-	m := engine.NewMatcher(engine.Config{
-		Workers:   2,
-		QueueSize: 100,
-	})
+	m := engine.NewMatcher(engine.Config{})
 	defer m.Shutdown()
 
 	ctx := context.Background()
@@ -40,10 +37,7 @@ func TestMatcher_Basic(t *testing.T) {
 
 // TestMatcher_OrderBook 测试订单簿
 func TestMatcher_OrderBook(t *testing.T) {
-	m := engine.NewMatcher(engine.Config{
-		Workers:   2,
-		QueueSize: 100,
-	})
+	m := engine.NewMatcher(engine.Config{})
 	defer m.Shutdown()
 
 	ctx := context.Background()
@@ -60,10 +54,7 @@ func TestMatcher_OrderBook(t *testing.T) {
 
 // TestMatcher_CancelOrder 测试取消订单
 func TestMatcher_CancelOrder(t *testing.T) {
-	m := engine.NewMatcher(engine.Config{
-		Workers:   2,
-		QueueSize: 100,
-	})
+	m := engine.NewMatcher(engine.Config{})
 	defer m.Shutdown()
 
 	ctx := context.Background()
@@ -83,10 +74,7 @@ func TestMatcher_CancelOrder(t *testing.T) {
 
 // TestMatcher_BestPrice 测试最佳价格
 func TestMatcher_BestPrice(t *testing.T) {
-	m := engine.NewMatcher(engine.Config{
-		Workers:   2,
-		QueueSize: 100,
-	})
+	m := engine.NewMatcher(engine.Config{})
 	defer m.Shutdown()
 
 	ctx := context.Background()
@@ -115,10 +103,7 @@ func TestMatcher_BestPrice(t *testing.T) {
 
 // TestMatcher_Shutdown 测试关闭
 func TestMatcher_Shutdown(t *testing.T) {
-	m := engine.NewMatcher(engine.Config{
-		Workers:   2,
-		QueueSize: 100,
-	})
+	m := engine.NewMatcher(engine.Config{})
 
 	assert.True(t, m.IsRunning())
 
@@ -127,29 +112,94 @@ func TestMatcher_Shutdown(t *testing.T) {
 	assert.False(t, m.IsRunning())
 }
 
-// TestMatcher_SubmitOrderAsync 测试异步提交
+// TestMatcher_SubmitOrderAsync tests submitting multiple orders concurrently
+// through the actor channel model (replaces worker-pool-based async test).
 func TestMatcher_SubmitOrderAsync(t *testing.T) {
-	m := engine.NewMatcher(engine.Config{
-		Workers:   2,
-		QueueSize: 100,
-	})
+	m := engine.NewMatcher(engine.Config{})
+	defer m.Shutdown()
+
+	ctx := context.Background()
+	var wg sync.WaitGroup
+
+	// Submit 10 orders concurrently
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			orderID := engine.GenerateOrderID()
+			_, err := m.SubmitOrder(ctx, orderID, int64(idx), "BTC/USDT",
+				model.OrderSideBuy, decimal.NewFromFloat(50000), decimal.NewFromFloat(0.1))
+			assert.NoError(t, err)
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Verify orders are in the book
+	bids, asks := m.GetOrderBook("BTC/USDT", 20)
+	assert.Len(t, bids, 10)
+	assert.Len(t, asks, 0)
+}
+
+// TestMatcher_ConcurrentSameSymbol verifies that 100 goroutines submitting
+// to the same symbol concurrently produce correct price-time ordered trades.
+func TestMatcher_ConcurrentSameSymbol(t *testing.T) {
+	m := engine.NewMatcher(engine.Config{})
 	defer m.Shutdown()
 
 	ctx := context.Background()
 
-	err := m.SubmitOrderAsync(ctx, "ORD001", 1, "BTC/USDT",
-		model.OrderSideBuy, decimal.NewFromFloat(50000), decimal.NewFromFloat(1.0))
-
+	// Place a large sell order first (acts as the liquidity source)
+	_, err := m.SubmitOrder(ctx, "SELL001", 1, "BTC/USDT",
+		model.OrderSideSell, decimal.NewFromFloat(50000), decimal.NewFromFloat(10.0))
 	assert.NoError(t, err)
-	time.Sleep(100 * time.Millisecond)
+
+	// 100 goroutines submit buy orders at the same price concurrently
+	const nOrders = 100
+	var wg sync.WaitGroup
+	results := make([]*engine.MatchResult, nOrders)
+	errors := make([]error, nOrders)
+
+	for i := 0; i < nOrders; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			orderID := engine.GenerateOrderID()
+			result, err := m.SubmitOrder(ctx, orderID, int64(idx), "BTC/USDT",
+				model.OrderSideBuy, decimal.NewFromFloat(50100), decimal.NewFromFloat(0.1))
+			results[idx] = result
+			errors[idx] = err
+		}(i)
+	}
+
+	wg.Wait()
+
+	// All orders should succeed
+	for i := 0; i < nOrders; i++ {
+		assert.NoError(t, errors[i], "order %d should not error", i)
+		assert.NotNil(t, results[i], "order %d should have result", i)
+	}
+
+	// Each order should have traded 0.1
+	for i := 0; i < nOrders; i++ {
+		if results[i] != nil && len(results[i].Trades) > 0 {
+			assert.True(t, results[i].Trades[0].Quantity.Equal(decimal.NewFromFloat(0.1)),
+				"order %d trade qty should be 0.1", i)
+		}
+	}
+
+	// All buy orders should have been filled
+	bids, _ := m.GetOrderBook("BTC/USDT", 200)
+	assert.Len(t, bids, 0, "no remaining bids after all 100 orders matched against sell")
+
+	// Sell order should be fully filled
+	bestBid, _ := m.GetBestPrice("BTC/USDT")
+	assert.True(t, bestBid.IsZero(), "best bid should be zero when sell is exhausted")
 }
 
 // TestMatcher_Stats 测试统计信息
 func TestMatcher_Stats(t *testing.T) {
-	m := engine.NewMatcher(engine.Config{
-		Workers:   2,
-		QueueSize: 100,
-	})
+	m := engine.NewMatcher(engine.Config{})
 	defer m.Shutdown()
 
 	ctx := context.Background()

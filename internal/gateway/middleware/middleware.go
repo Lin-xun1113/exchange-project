@@ -5,6 +5,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"github.com/linxun2025/exchange-project/pkg/logger"
 	"github.com/linxun2025/exchange-project/pkg/metrics"
 	"github.com/linxun2025/exchange-project/pkg/response"
@@ -24,6 +27,10 @@ func RequestID() gin.HandlerFunc {
 
 		c.Set("request_id", requestID)
 		c.Header("X-Request-ID", requestID)
+		c.Request = c.Request.WithContext(logger.WithRequestID(c.Request.Context(), requestID))
+		if span := trace.SpanFromContext(c.Request.Context()); span.IsRecording() {
+			span.SetAttributes(attribute.String("request.id", requestID))
+		}
 		c.Next()
 	}
 }
@@ -149,5 +156,5 @@ func RateLimit(requests int, window time.Duration) gin.HandlerFunc {
 
 // generateRequestID 生成请求ID
 func generateRequestID() string {
-	return time.Now().Format("20060102150405.000000")
+	return uuid.NewString()
 }
