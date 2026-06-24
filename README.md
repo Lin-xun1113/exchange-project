@@ -268,14 +268,7 @@ exchange-project/
 docker-compose up -d mysql redis jaeger
 ```
 
-### 2. 初始化数据库 (Docker 自动执行)
-
-```bash
-# migrations 目录下的 SQL 文件会在 docker-compose up 时自动执行
-# 无需手动执行
-```
-
-### 3. 启动服务
+### 2. 启动服务
 
 ```bash
 # 启动 API Gateway
@@ -291,13 +284,13 @@ go run cmd/order-svc/main.go
 go run cmd/matching-svc/main.go
 ```
 
-### 4. 访问服务
+### 3. 访问服务
 
 - API Gateway: http://localhost:8080
 - Jaeger UI: http://localhost:16686 (分布式追踪)
 - Prometheus 指标: http://localhost:8080/metrics
 
-### 5. WAL/Snapshot 数据卷 (本地开发)
+### 4. WAL/Snapshot 数据卷 (本地开发)
 
 ```bash
 # 手动创建 WAL 和 Snapshot 数据目录
