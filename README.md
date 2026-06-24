@@ -8,19 +8,21 @@
 
 | 分类 | 技术 |
 |------|------|
-| 语言 | Go 1.21+ |
+| 语言 | Go 1.25.8 |
 | Web 框架 | Gin |
 | RPC | gRPC + Protobuf |
 | 数据库 | MySQL + GORM |
-| 缓存 | Redis (go-redis/redis/v8) |
+| 缓存 | Redis (go-redis/redis/v9) |
 | 监控 | Prometheus |
+| 追踪 | OpenTelemetry + Jaeger |
+| 熔断 | gobreaker (sony/gobreaker) |
 | 日志 | zap |
 | 容器化 | Docker + Docker Compose |
 
 ## 核心功能
 
 - [x] 撮合引擎 (Matching Engine) - Per-Symbol Actor 模型
-- [x] 订单簿 (OrderBook) - 价格优先 + 时间优先
+- [x] 订单簿 (OrderBook) - 跳表实现价格优先 + 时间优先
 - [x] **订单类型**: 支持 Limit / Market / IOC / FOK 四种类型
 - [x] 订单管理 (Order Service)
 - [x] 用户账户 (User Service)
@@ -34,6 +36,12 @@
 - [x] gRPC 拦截器 (超时/重试/熔断)
 - [x] 统一错误码
 - [x] 结构化日志 (request_id 链路)
+- [x] **Saga 编排模式** - 订单创建 Saga 编排器
+- [x] **事务性 Outbox 模式** - 可靠消息投递, 指数退避 + jitter 重试
+- [x] **分布式限流** - Sliding Window 算法 + Redis
+- [x] **熔断器保护** - Circuit Breaker (gobreaker)
+- [x] **WAL + Snapshot 恢复** - 崩溃恢复机制
+- [x] **Prometheus 指标扩展** - 覆盖 HTTP/gRPC/撮合/Saga/Outbox/限流
 
 ## 支持的订单类型
 
@@ -167,25 +175,40 @@ exchange-project/
 │   ├── config/               # 配置管理
 │   ├── errors/               # 统一错误码
 │   ├── logger/               # 结构化日志
+│   ├── metrics/              # Prometheus 指标
+│   ├── tracing/              # OpenTelemetry 追踪
 │   └── response/             # 统一响应
 ├── internal/
 │   ├── gateway/              # API Gateway 实现
 │   │   ├── handler/         # HTTP Handler
-│   │   └── middleware/       # JWT / 限流中间件
+│   │   ├── middleware/       # JWT / 限流 / 熔断中间件
+│   │   ├── router/          # 路由配置
+│   │   └── client/          # gRPC 客户端
 │   ├── user/                 # 用户服务
 │   │   ├── repository/      # User Repository (含缓存)
-│   │   └── service/         # User Service (含分布式锁)
+│   │   ├── service/         # User Service (含分布式锁)
+│   │   └── server/         # gRPC Server
 │   ├── order/                # 订单服务
 │   │   ├── repository/      # Order/Trade Repository
-│   │   └── service/         # Order Service (幂等)
+│   │   ├── service/         # Order Service (幂等)
+│   │   ├── saga/           # Saga 编排器
+│   │   ├── outbox/         # 事务性发件箱
+│   │   └── server/         # gRPC Server
 │   ├── matching/             # 撮合引擎
-│   │   ├── engine/          # Matcher + Actor
+│   │   ├── engine/          # Matcher + Actor + WAL/Snapshot
 │   │   ├── book/            # OrderBook (SkipList)
-│   │   ├── server/          # gRPC Server
-│   │   └── workerpool/      # Worker Pool
+│   │   ├── wal/            # Write-Ahead Log
+│   │   ├── snapshot/       # 快照管理
+│   │   ├── server/         # gRPC Server
+│   │   └── workerpool/     # Worker Pool
 │   └── notify/               # 通知服务
 │       └── consumer/         # Redis Stream Consumer
+├── test/
+│   └── integration/          # 集成测试 (WAL 恢复测试)
 ├── migrations/                # 数据库迁移
+├── docs/                      # 文档
+│   └── interview/            # 面试题解析
+├── openspec/                  # OpenSpec 变更规格
 └── scripts/                  # 工具脚本
 ```
 
@@ -198,7 +221,7 @@ exchange-project/
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  API Gateway (Gin) → JWT Middleware → Rate Limit                │
+│  API Gateway (Gin) → JWT Middleware → Rate Limit → Circuit Breaker │
 └─────────────────────────────┬───────────────────────────────────┘
                               │
         ┌─────────────────────┼─────────────────────┐
@@ -213,19 +236,27 @@ exchange-project/
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Redis / MySQL                               │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐│
-│  │ Cache-Aside │  │ 分布式锁    │  │ Redis Stream (事件)     ││
+│  │ Cache-Aside │  │ 分布式锁    │  │ Redis Stream (事件)    ││
 │  │ (5min TTL)  │  │ (SetNX)     │  │ Consumer Group         ││
 │  └─────────────┘  └─────────────┘  └─────────────────────────┘│
 │  ┌─────────────────────────────────────────────────────────────┐│
-│  │ MySQL: users / orders / trades (GORM + 事务)               ││
-│  └─────────────────────────────────────────────────────────────┘│
+│  │ MySQL: users / orders / trades / outbox (GORM + 事务)     ││
+│  └─────────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────────────┘
+                              │
+        ┌─────────────────────┴─────────────────────┐
+        ▼                                           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Saga Orchestrator (Order Saga)                                  │
+│  CreateOrderSaga → Outbox Pattern → 补偿事务                     │
+└─────────────────────────────┬───────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  Matching Engine                                                 │
 │  Matcher → Per-Symbol Actor → OrderBook (SkipList)              │
 │  价格优先 + 时间优先 (纳秒级 FIFO)                              │
+│  WAL Manager → Write-Ahead Log → Snapshot Recovery              │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -234,7 +265,7 @@ exchange-project/
 ### 1. 启动依赖服务
 
 ```bash
-docker-compose up -d mysql redis
+docker-compose up -d mysql redis jaeger
 ```
 
 ### 2. 初始化数据库 (Docker 自动执行)
@@ -259,6 +290,21 @@ go run cmd/order-svc/main.go
 # 启动 Matching Service
 go run cmd/matching-svc/main.go
 ```
+
+### 4. 访问服务
+
+- API Gateway: http://localhost:8080
+- Jaeger UI: http://localhost:16686 (分布式追踪)
+- Prometheus 指标: http://localhost:8080/metrics
+
+### 5. WAL/Snapshot 数据卷 (本地开发)
+
+```bash
+# 手动创建 WAL 和 Snapshot 数据目录
+mkdir -p data/wal data/snapshot
+```
+
+> Matching Service 会自动使用 Docker Compose 中配置的数据卷进行 WAL 写入和快照保存,用于崩溃恢复。
 
 ## API 接口
 
@@ -306,3 +352,4 @@ go run cmd/matching-svc/main.go
 | 幂等 Key | `idempotency:order:{key}` | 24h | 防重复下单 |
 | 分布式锁 | `lock:*:{resource}` | 10s | SetNX |
 | 事件流 | `events` Stream | 持久 | Redis Stream |
+| 限流 | `rate:{scope}:{identity}:{window}` | window+1min | Sliding Window |
