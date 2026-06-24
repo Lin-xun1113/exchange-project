@@ -9,12 +9,87 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/linxun2025/exchange-project/internal/gateway/client"
 	"github.com/linxun2025/exchange-project/internal/gateway/middleware"
+	"github.com/linxun2025/exchange-project/internal/model"
+	"github.com/linxun2025/exchange-project/internal/order/outbox"
+	"github.com/linxun2025/exchange-project/internal/order/saga"
 	"github.com/linxun2025/exchange-project/pkg/logger"
 	"github.com/linxun2025/exchange-project/pkg/response"
+	"github.com/shopspring/decimal"
 	matchingpb "github.com/linxun2025/exchange-project/api/gen/matching/v1"
 	orderpb "github.com/linxun2025/exchange-project/api/gen/order/v1"
 	userpb "github.com/linxun2025/exchange-project/api/gen/user/v1"
+	"gorm.io/gorm"
 )
+
+// GatewayOrderRepository Gateway专用的订单仓储（不需要Redis缓存）
+type GatewayOrderRepository struct {
+	db *gorm.DB
+}
+
+// NewGatewayOrderRepository 创建Gateway订单仓储
+func NewGatewayOrderRepository(db *gorm.DB) *GatewayOrderRepository {
+	return &GatewayOrderRepository{db: db}
+}
+
+// GetByIdempotencyKey 根据幂等键获取订单
+func (r *GatewayOrderRepository) GetByIdempotencyKey(ctx context.Context, key string) (*model.Order, error) {
+	var order model.Order
+	result := r.db.WithContext(ctx).Where("idempotency_key = ?", key).First(&order)
+	if result.Error != nil {
+		if result.Error == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, result.Error
+	}
+	return &order, nil
+}
+
+// GetByOrderID 根据订单ID获取订单
+func (r *GatewayOrderRepository) GetByOrderID(ctx context.Context, orderID string) (*model.Order, error) {
+	var order model.Order
+	result := r.db.WithContext(ctx).Where("order_id = ?", orderID).First(&order)
+	if result.Error != nil {
+		if result.Error == gorm.ErrRecordNotFound {
+			return nil, fmt.Errorf("order not found: %s", orderID)
+		}
+		return nil, result.Error
+	}
+	return &order, nil
+}
+
+// UpdateStatus 更新订单状态
+func (r *GatewayOrderRepository) UpdateStatus(ctx context.Context, orderID string, status model.OrderStatus, filledQty float64) error {
+	result := r.db.WithContext(ctx).Model(&model.Order{}).
+		Where("order_id = ?", orderID).
+		Updates(map[string]interface{}{
+			"status":          status,
+			"filled_quantity": filledQty,
+		})
+	return result.Error
+}
+
+// UpdateStatusByOrderID 根据订单ID更新状态（使用字符串状态）
+func (r *GatewayOrderRepository) UpdateStatusByOrderID(ctx context.Context, orderID, status string, filledQty float64) error {
+	result := r.db.WithContext(ctx).Model(&model.Order{}).
+		Where("order_id = ?", orderID).
+		Updates(map[string]interface{}{
+			"status":          status,
+			"filled_quantity": filledQty,
+		})
+	return result.Error
+}
+
+// CacheOrder 缓存订单到Redis
+func (r *GatewayOrderRepository) CacheOrder(ctx context.Context, order *model.Order) error {
+	// Gateway不缓存订单，只记录幂等key到Redis
+	return nil
+}
+
+// GetByIdempotencyKeyFromCache 从Redis缓存获取订单
+func (r *GatewayOrderRepository) GetByIdempotencyKeyFromCache(ctx context.Context, key string) (*model.Order, error) {
+	// Gateway不使用Redis缓存
+	return nil, nil
+}
 
 // UserServiceClient defines the interface for user service operations needed by handlers
 type UserServiceClient interface {
@@ -158,11 +233,27 @@ func (h *HealthHandler) Ready(c *gin.Context) {
 
 // OrderHandler 订单 Handler
 type OrderHandler struct {
-	clients *client.Clients
+	clients          *client.Clients
+	sagaOrchestrator *saga.OrderSaga
+	outboxWorker     *outbox.Worker
 }
 
+// NewOrderHandler 创建订单Handler（不使用Saga的老版本）
 func NewOrderHandler(clients *client.Clients) *OrderHandler {
 	return &OrderHandler{clients: clients}
+}
+
+// NewOrderHandlerWithSaga 创建使用Saga编排器的订单Handler
+func NewOrderHandlerWithSaga(clients *client.Clients, db *gorm.DB, outboxWorker *outbox.Worker) *OrderHandler {
+	orderRepo := NewGatewayOrderRepository(db)
+	outboxRepo := outbox.NewGormRepository(db)
+	orderSaga := saga.NewOrderSaga(db, orderRepo, outboxRepo)
+
+	return &OrderHandler{
+		clients:          clients,
+		sagaOrchestrator: orderSaga,
+		outboxWorker:     outboxWorker,
+	}
 }
 
 // CreateOrderRequest 创建订单请求
@@ -175,7 +266,7 @@ type CreateOrderRequest struct {
 	IdempotencyKey string  `json:"idempotency_key" binding:"omitempty"`
 }
 
-// CreateOrder 创建订单
+// CreateOrder 创建订单 - 使用Saga编排器
 func (h *OrderHandler) CreateOrder(c *gin.Context) {
 	userID := middleware.GetUserID(c)
 	if userID == 0 {
@@ -196,9 +287,76 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 			return
 		}
 	}
-	// Market, IOC, FOK orders may have price = 0 (no price restriction)
 
-	logger.WithContext(c.Request.Context()).Info("create order",
+	// 如果配置了Saga编排器，使用Saga模式
+	if h.sagaOrchestrator != nil {
+		h.createOrderWithSaga(c, userID, &req)
+		return
+	}
+
+	// 否则使用传统模式
+	h.createOrderLegacy(c, userID, &req)
+}
+
+// createOrderWithSaga 使用Saga编排器创建订单
+func (h *OrderHandler) createOrderWithSaga(c *gin.Context, userID int64, req *CreateOrderRequest) {
+	logger.WithContext(c.Request.Context()).Info("create order with saga",
+		logger.I64("user_id", userID),
+		logger.S("symbol", req.Symbol),
+		logger.S("side", req.Side),
+		logger.F("price", req.Price),
+		logger.F("quantity", req.Quantity),
+		logger.S("idempotency_key", req.IdempotencyKey),
+	)
+
+	// 如果没有幂等key，生成一个
+	if req.IdempotencyKey == "" {
+		req.IdempotencyKey = fmt.Sprintf("order_%d_%d", userID, time.Now().UnixNano())
+	}
+
+	// 创建Saga请求
+	orderSide := "buy"
+	if req.Side == "sell" {
+		orderSide = "sell"
+	}
+
+	orderType := "limit"
+	switch req.OrderType {
+	case "market", "ioc", "fok":
+		orderType = req.OrderType
+	}
+
+	sagaReq := &saga.CreateOrderRequest{
+		UserID:         userID,
+		Symbol:         req.Symbol,
+		Side:           model.OrderSide(orderSide),
+		OrderType:      model.OrderType(orderType),
+		Price:          decimal.NewFromFloat(req.Price),
+		Quantity:       decimal.NewFromFloat(req.Quantity),
+		IdempotencyKey: req.IdempotencyKey,
+	}
+
+	result, err := h.sagaOrchestrator.CreateOrderSaga(c.Request.Context(), sagaReq)
+	if err != nil {
+		logger.WithContext(c.Request.Context()).Error("failed to create order saga", logger.Err(err))
+		response.InternalServerError(c, "failed to create order")
+		return
+	}
+
+	// 返回创建成功的结果
+	// 注意：实际的撮合是异步的，outbox worker会处理
+	response.Success(c, gin.H{
+		"order_id":        result.OrderID,
+		"saga_id":         result.SagaID,
+		"status":          result.Status,
+		"message":         "order created, processing asynchronously",
+		"idempotency_key": req.IdempotencyKey,
+	})
+}
+
+// createOrderLegacy 传统模式创建订单（不使用Saga）
+func (h *OrderHandler) createOrderLegacy(c *gin.Context, userID int64, req *CreateOrderRequest) {
+	logger.WithContext(c.Request.Context()).Info("create order (legacy mode)",
 		logger.I64("user_id", userID),
 		logger.S("symbol", req.Symbol),
 		logger.S("side", req.Side),
@@ -211,7 +369,7 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 	freezeReq := &userpb.FreezeAmountRequest{
 		UserId:  userID,
 		Amount:  formatDecimal(amount),
-		OrderId: "", // 稍后更新
+		OrderId: "",
 	}
 
 	freezeResp, err := h.clients.User.FreezeAmount(c.Request.Context(), freezeReq)
@@ -253,7 +411,6 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 
 	matchingResp, err := h.clients.Matching.SubmitOrder(c.Request.Context(), matchingReq)
 	if err != nil {
-		// 撮合失败，解冻金额
 		h.clients.User.UnfreezeAmount(c.Request.Context(), &userpb.UnfreezeAmountRequest{
 			UserId:  userID,
 			Amount:  formatDecimal(amount),
@@ -264,16 +421,13 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 		return
 	}
 
-	// 更新订单状态
 	if matchingResp.Success {
-		// 完全成交
 		h.clients.Order.UpdateOrderStatus(c.Request.Context(), &orderpb.UpdateOrderStatusRequest{
 			OrderId:        matchingResp.Trades[0].GetBuyOrderId(),
 			Status:         orderpb.OrderStatus_ORDER_STATUS_FILLED,
 			FilledQuantity: formatDecimal(req.Quantity),
 		})
 	} else if matchingResp.RemainingQuantity != "" && matchingResp.RemainingQuantity != "0" {
-		// 部分成交
 		filledQty := req.Quantity - parseDecimal(matchingResp.RemainingQuantity)
 		h.clients.Order.UpdateOrderStatus(c.Request.Context(), &orderpb.UpdateOrderStatusRequest{
 			OrderId:        matchingResp.Trades[0].GetBuyOrderId(),
@@ -283,9 +437,9 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 	}
 
 	response.Success(c, gin.H{
-		"success":           matchingResp.Success,
-		"filled_quantity":   matchingResp.RemainingQuantity,
-		"trades":            len(matchingResp.Trades),
+		"success":         matchingResp.Success,
+		"filled_quantity": matchingResp.RemainingQuantity,
+		"trades":         len(matchingResp.Trades),
 	})
 }
 

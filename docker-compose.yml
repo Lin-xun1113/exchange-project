@@ -161,6 +161,9 @@ services:
       OTEL_SERVICE_NAME: matching-svc
     ports:
       - "50053:50053"
+    volumes:
+      - ./data/wal:/app/wal
+      - ./data/snapshot:/app/snapshot
     depends_on:
       redis:
         condition: service_healthy

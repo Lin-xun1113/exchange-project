@@ -237,10 +237,11 @@ exchange-project/
 docker-compose up -d mysql redis
 ```
 
-### 2. 初始化数据库
+### 2. 初始化数据库 (Docker 自动执行)
 
 ```bash
-mysql -h localhost -u root -p < migrations/001_init_schema.sql
+# migrations 目录下的 SQL 文件会在 docker-compose up 时自动执行
+# 无需手动执行
 ```
 
 ### 3. 启动服务

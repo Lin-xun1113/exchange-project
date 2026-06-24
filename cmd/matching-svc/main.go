@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -26,23 +27,20 @@ import (
 	"gorm.io/gorm"
 )
 
-// gRPC server performance options
 const (
 	grpcMaxConcurrentStreams = 100
-	grpcMaxRecvMsgSize      = 1024 * 1024 * 4 // 4MB
-	grpcMaxSendMsgSize      = 1024 * 1024 * 4 // 4MB
-	grpcReadBufferSize      = 32 * 1024       // 32KB
-	grpcWriteBufferSize     = 32 * 1024       // 32KB
+	grpcMaxRecvMsgSize      = 1024 * 1024 * 4
+	grpcMaxSendMsgSize      = 1024 * 1024 * 4
+	grpcReadBufferSize      = 32 * 1024
+	grpcWriteBufferSize     = 32 * 1024
 )
 
 func main() {
-	// 加载配置
 	cfg, err := config.Load("")
 	if err != nil {
 		logger.Fatal("failed to load config", logger.Err(err))
 	}
 
-	// 初始化日志
 	if err := logger.Init(cfg.App.Environment); err != nil {
 		logger.Fatal("failed to init logger", logger.Err(err))
 	}
@@ -53,7 +51,6 @@ func main() {
 		logger.S("environment", cfg.App.Environment),
 	)
 
-	// 初始化 OpenTelemetry tracing
 	otelEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 	tracingShutdown, err := tracing.Init(context.Background(), "matching-svc", otelEndpoint)
 	if err != nil {
@@ -68,29 +65,55 @@ func main() {
 		}()
 	}
 
-	// 初始化数据库连接
 	db, err := gorm.Open(mysql.Open(cfg.Database.DSN()), &gorm.Config{})
 	if err != nil {
 		logger.Fatal("failed to connect to database", zap.Error(err))
 	}
 
-	// 初始化交易仓储
 	tradeRepo := repository.NewTradeRepository(db)
 
-	// 创建撮合引擎
+	// WAL and Snapshot directories from config or environment.
+	walDir := getEnvOrDefault("WAL_DIR", "data/wal")
+	snapshotDir := getEnvOrDefault("SNAPSHOT_DIR", "data/snapshots")
+	maxTradesPerSnapshot := getEnvIntOrDefault("MAX_TRADES_PER_SNAPSHOT", 1000)
+	snapshotInterval := time.Duration(getEnvIntOrDefault("SNAPSHOT_INTERVAL_SECONDS", 60)) * time.Second
+
+	logger.Info("WAL and snapshot config",
+		logger.S("wal_dir", walDir),
+		logger.S("snapshot_dir", snapshotDir),
+		logger.I("max_trades_per_snapshot", maxTradesPerSnapshot),
+		logger.S("snapshot_interval", snapshotInterval.String()),
+	)
+
+	// Create WAL manager.
+	walManager := engine.NewWALManager(walDir)
+	defer walManager.Close()
+
+	// Create matcher.
 	matcher := engine.NewMatcher(engine.Config{
 		ActorTimeout: 5 * time.Second,
 	})
 	defer matcher.Shutdown()
 
-	// 创建 Order Service gRPC 客户端
+	// Set WAL manager on matcher.
+	matcher.SetWALManager(walManager)
+
+	// Run crash recovery before accepting requests.
+	if err := matcher.Recover(engine.RecoveryConfig{
+		WALDir:              walDir,
+		SnapshotDir:         snapshotDir,
+		MaxTradesPerSnapshot: maxTradesPerSnapshot,
+		SnapshotInterval:    snapshotInterval,
+	}); err != nil {
+		logger.Error("crash recovery failed", logger.Err(err))
+	}
+
 	orderClient, err := client.NewOrderClient(cfg.GRPC.OrderGRPCAddr)
 	if err != nil {
 		logger.Fatal("failed to create order client", zap.Error(err))
 	}
 	defer orderClient.Close()
 
-	// 创建 gRPC 服务器
 	lis, err := net.Listen("tcp", ":50053")
 	if err != nil {
 		logger.Fatal("failed to listen", zap.Error(err))
@@ -106,13 +129,9 @@ func main() {
 		grpc.WriteBufferSize(grpcWriteBufferSize),
 	)
 
-	// 注册 gRPC 服务
 	matchingpb.RegisterMatchingServiceServer(grpcServer, server.NewMatchingServer(matcher, orderClient, tradeRepo))
-
-	// 启用 gRPC 反射
 	reflection.Register(grpcServer)
 
-	// 启动服务
 	go func() {
 		logger.Info("gRPC server starting", logger.S("address", ":50053"))
 		if err := grpcServer.Serve(lis); err != nil {
@@ -120,15 +139,30 @@ func main() {
 		}
 	}()
 
-	// 等待中断信号
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	logger.Info("shutting down gRPC server...")
+	logger.Info("shutting down Matching Service...")
 
 	grpcServer.GracefulStop()
 	matcher.Shutdown()
 
 	logger.Info("Matching Service stopped")
+}
+
+func getEnvOrDefault(key, defaultVal string) string {
+	if val := os.Getenv(key); val != "" {
+		return val
+	}
+	return defaultVal
+}
+
+func getEnvIntOrDefault(key string, defaultVal int) int {
+	if val := os.Getenv(key); val != "" {
+		if intVal, err := strconv.Atoi(val); err == nil {
+			return intVal
+		}
+	}
+	return defaultVal
 }

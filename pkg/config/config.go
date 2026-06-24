@@ -16,14 +16,15 @@ import (
 
 // Config 全局配置
 type Config struct {
-	App      AppConfig      `yaml:"app"`
-	Server   ServerConfig   `yaml:"server"`
-	Database DatabaseConfig `yaml:"database"`
-	Redis    RedisConfig    `yaml:"redis"`
-	JWT      JWTConfig      `yaml:"jwt"`
-	Logging  LoggingConfig  `yaml:"logging"`
-	Service  ServiceConfig  `yaml:"service"`
-	GRPC     GRPCConfig     `yaml:"grpc"`
+	App        AppConfig        `yaml:"app"`
+	Server     ServerConfig     `yaml:"server"`
+	Database   DatabaseConfig   `yaml:"database"`
+	Redis      RedisConfig      `yaml:"redis"`
+	JWT        JWTConfig        `yaml:"jwt"`
+	Logging    LoggingConfig    `yaml:"logging"`
+	Service    ServiceConfig    `yaml:"service"`
+	GRPC       GRPCConfig       `yaml:"grpc"`
+	RateLimit  RateLimitConfig  `yaml:"rate_limit"`
 }
 
 // GRPCConfig gRPC 服务配置
@@ -111,6 +112,62 @@ type ServiceConfig struct {
 	Addr    string `yaml:"addr"`
 }
 
+// RateLimitConfig 限流配置
+type RateLimitConfig struct {
+	Enabled  bool             `yaml:"enabled"`
+	Policies []RateLimitPolicy `yaml:"policies"`
+}
+
+// RateLimitPolicy 限流策略
+type RateLimitPolicy struct {
+	Name       string   `yaml:"name"`
+	Scope      string   `yaml:"scope"`       // ip, user, api
+	Limit      string   `yaml:"limit"`       // e.g., "100/m", "10/s"
+	Paths      []string `yaml:"paths"`       // 限流路径列表，空表示全部路径
+	WindowSec  int64    `yaml:"-"`           // 解析后的窗口秒数
+	MaxCount   int64    `yaml:"-"`           // 解析后的最大请求数
+}
+
+// ParseLimit 解析限流限制字符串，如 "100/m" -> maxCount=100, windowSec=60
+func (p *RateLimitPolicy) ParseLimit() error {
+	parts := strings.Split(p.Limit, "/")
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid limit format: %s, expected format: '100/m'", p.Limit)
+	}
+
+	maxCount, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid limit count: %s", parts[0])
+	}
+	p.MaxCount = maxCount
+
+	switch parts[1] {
+	case "s":
+		p.WindowSec = 1
+	case "m":
+		p.WindowSec = 60
+	case "h":
+		p.WindowSec = 3600
+	default:
+		return fmt.Errorf("invalid time unit: %s, expected s/m/h", parts[1])
+	}
+
+	return nil
+}
+
+// MatchPath 检查路径是否匹配策略
+func (p *RateLimitPolicy) MatchPath(path string) bool {
+	if len(p.Paths) == 0 {
+		return true
+	}
+	for _, p := range p.Paths {
+		if p == path {
+			return true
+		}
+	}
+	return false
+}
+
 // Load 加载配置
 func Load(configPath string) (*Config, error) {
 	// 优先从环境变量覆盖
@@ -163,6 +220,19 @@ func Load(configPath string) (*Config, error) {
 	cfg.GRPC.OrderGRPCAddr = getEnv("ORDER_GRPC_ADDR", "localhost:50052")
 	cfg.GRPC.MatchingGRPCAddr = getEnv("MATCHING_GRPC_ADDR", "localhost:50053")
 
+	// 限流配置
+	cfg.RateLimit.Enabled = getEnv("RATE_LIMIT_ENABLED", "true") == "true"
+
+	// 解析限流策略
+	for i := range cfg.RateLimit.Policies {
+		if err := cfg.RateLimit.Policies[i].ParseLimit(); err != nil {
+			logger.Warn("failed to parse rate limit policy",
+				logger.S("policy", cfg.RateLimit.Policies[i].Name),
+				logger.Err(err),
+			)
+		}
+	}
+
 	logger.Info("configuration loaded",
 		logger.S("app_name", cfg.App.Name),
 		logger.S("environment", cfg.App.Environment),
@@ -212,6 +282,14 @@ func LoadDefault() *Config {
 			MaxSize:    100,
 			MaxBackups: 7,
 			MaxAge:     30,
+		},
+		RateLimit: RateLimitConfig{
+			Enabled: true,
+			Policies: []RateLimitPolicy{
+				{Name: "global_ip", Scope: "ip", Limit: "100/m", Paths: nil},
+				{Name: "create_order_per_user", Scope: "user", Limit: "10/s", Paths: []string{"/api/v1/orders"}},
+				{Name: "login_per_ip", Scope: "ip", Limit: "5/m", Paths: []string{"/api/v1/auth/login"}},
+			},
 		},
 	}
 }

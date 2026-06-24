@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/linxun2025/exchange-project/pkg/metrics"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
@@ -13,6 +14,27 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
+
+// sdktrace.Span is the interface we need
+type metricsExporter struct {
+	delegate sdktrace.SpanExporter
+}
+
+// ExportSpans wraps the delegate exporter and records metrics
+func (e *metricsExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
+	err := e.delegate.ExportSpans(ctx, spans)
+	if err != nil {
+		metrics.GetMetrics().RecordTraceExporterExport("error")
+		return err
+	}
+	metrics.GetMetrics().RecordTraceExporterExport("success")
+	return nil
+}
+
+// Shutdown delegates to the underlying exporter
+func (e *metricsExporter) Shutdown(ctx context.Context) error {
+	return e.delegate.Shutdown(ctx)
+}
 
 // Init initializes the OpenTelemetry SDK with an OTLP gRPC exporter and a
 // ParentBased(AlwaysSample) sampler. It returns a shutdown function that must
@@ -33,6 +55,9 @@ func Init(ctx context.Context, serviceName, otlpEndpoint string) (shutdown func(
 		return nil, fmt.Errorf("failed to create OTLP exporter: %w", err)
 	}
 
+	// Wrap the exporter to record metrics
+	metricsExporter := &metricsExporter{delegate: exporter}
+
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
 			semconv.ServiceName(serviceName),
@@ -44,7 +69,7 @@ func Init(ctx context.Context, serviceName, otlpEndpoint string) (shutdown func(
 	}
 
 	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exporter),
+		sdktrace.WithBatcher(metricsExporter),
 		sdktrace.WithResource(res),
 		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.AlwaysSample())),
 	)

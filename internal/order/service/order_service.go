@@ -14,6 +14,7 @@ import (
 	userrepo "github.com/linxun2025/exchange-project/internal/user/repository"
 	"github.com/linxun2025/exchange-project/pkg/errors"
 	"github.com/linxun2025/exchange-project/pkg/logger"
+	"github.com/linxun2025/exchange-project/pkg/metrics"
 	"github.com/shopspring/decimal"
 )
 
@@ -129,6 +130,8 @@ func (s *OrderService) CreateOrder(ctx context.Context, req *CreateOrderRequest)
 		logger.S("quantity", req.Quantity.String()),
 	)
 
+	metrics.GetMetrics().RecordOrderCreated(string(req.Side), req.Symbol)
+
 	return order, nil
 }
 
@@ -173,6 +176,8 @@ func (s *OrderService) CancelOrder(ctx context.Context, orderID string, userID i
 		logger.I64("user_id", userID),
 	)
 
+	metrics.GetMetrics().RecordOrderCancelled(order.Side, order.Symbol)
+
 	return order, nil
 }
 
@@ -207,7 +212,25 @@ func (s *OrderService) UpdateFilledQuantity(ctx context.Context, orderID string,
 		status = model.OrderStatusPartialFilled
 	}
 
-	return s.orderRepo.UpdateStatus(ctx, orderID, status, filledQty)
+	err = s.orderRepo.UpdateStatus(ctx, orderID, status, filledQty)
+	if err != nil {
+		return err
+	}
+
+	if order.Quantity > 0 {
+		fillRate := filledQty / order.Quantity
+		metrics.GetMetrics().RecordOrderFillRate(order.Side, order.Symbol, fillRate)
+	}
+
+	return nil
+}
+
+// RecordOrderFillRate 记录订单成交率（供外部调用）
+func (s *OrderService) RecordOrderFillRate(orderID string, filledQty, totalQty float64) {
+	if totalQty > 0 {
+		fillRate := filledQty / totalQty
+		metrics.GetMetrics().RecordOrderFillRate("unknown", "unknown", fillRate)
+	}
 }
 
 // generateOrderID 生成订单ID

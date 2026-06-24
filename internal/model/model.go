@@ -35,7 +35,7 @@ type Order struct {
 	Price          float64   `gorm:"type:decimal(20,8);not null" json:"price"`
 	Quantity       float64   `gorm:"type:decimal(20,8);not null" json:"quantity"`
 	FilledQuantity float64   `gorm:"type:decimal(20,8);default:0;not null" json:"filled_quantity"`
-	Status         string    `gorm:"type:enum('pending','partial_filled','filled','cancelled','rejected');default:'pending';not null;index" json:"status"`
+	Status         string    `gorm:"type:enum('created','frozen','pending','partial_filled','filled','cancelled','rejected','submitted','settled');default:'created';not null;index" json:"status"`
 	CreatedAt      time.Time `gorm:"autoCreateTime;index" json:"created_at"`
 	UpdatedAt      time.Time `gorm:"autoUpdateTime" json:"updated_at"`
 	User           *User     `gorm:"foreignKey:UserID" json:"user,omitempty"`
@@ -82,16 +82,47 @@ func (t OrderType) String() string {
 type OrderStatus string
 
 const (
-	OrderStatusPending      OrderStatus = "pending"
-	OrderStatusPartialFilled OrderStatus = "partial_filled"
-	OrderStatusFilled       OrderStatus = "filled"
-	OrderStatusCancelled    OrderStatus = "cancelled"
-	OrderStatusRejected     OrderStatus = "rejected"
+	OrderStatusCreated      OrderStatus = "created"      // 订单创建，等待冻结
+	OrderStatusFrozen      OrderStatus = "frozen"      // 余额已冻结，等待提交
+	OrderStatusPending     OrderStatus = "pending"     // 已提交到撮合引擎
+	OrderStatusPartialFilled OrderStatus = "partial_filled" // 部分成交
+	OrderStatusFilled      OrderStatus = "filled"      // 完全成交
+	OrderStatusCancelled   OrderStatus = "cancelled"   // 已取消
+	OrderStatusRejected    OrderStatus = "rejected"    // 被拒绝
+	OrderStatusSubmitted   OrderStatus = "submitted"   // 已提交（撮合确认）
+	OrderStatusSettled     OrderStatus = "settled"     // 已结算（资金划转完成）
 )
 
 // IsFinalStatus 判断是否为终态
 func (s OrderStatus) IsFinalStatus() bool {
-	return s == OrderStatusFilled || s == OrderStatusCancelled || s == OrderStatusRejected
+	return s == OrderStatusFilled || s == OrderStatusCancelled || s == OrderStatusRejected || s == OrderStatusSettled
+}
+
+// ValidTransitions 定义有效的状态转换
+var ValidTransitions = map[OrderStatus][]OrderStatus{
+	OrderStatusCreated:      {OrderStatusFrozen, OrderStatusCancelled},
+	OrderStatusFrozen:      {OrderStatusPending, OrderStatusCancelled},
+	OrderStatusPending:     {OrderStatusPartialFilled, OrderStatusFilled, OrderStatusCancelled, OrderStatusRejected},
+	OrderStatusPartialFilled: {OrderStatusFilled, OrderStatusCancelled, OrderStatusRejected},
+	OrderStatusSubmitted:    {OrderStatusPartialFilled, OrderStatusFilled, OrderStatusCancelled, OrderStatusRejected},
+	OrderStatusFilled:      {OrderStatusSettled},
+	OrderStatusSettled:     {}, // 终态，不可转换
+	OrderStatusCancelled:   {}, // 终态，不可转换
+	OrderStatusRejected:    {}, // 终态，不可转换
+}
+
+// CanTransitionTo 检查是否可以转换到目标状态
+func (s OrderStatus) CanTransitionTo(target OrderStatus) bool {
+	validTargets, ok := ValidTransitions[s]
+	if !ok {
+		return false
+	}
+	for _, t := range validTargets {
+		if t == target {
+			return true
+		}
+	}
+	return false
 }
 
 // Trade 交易记录模型

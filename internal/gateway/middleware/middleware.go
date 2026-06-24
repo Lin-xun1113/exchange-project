@@ -8,9 +8,11 @@ import (
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+	"github.com/linxun2025/exchange-project/pkg/config"
 	"github.com/linxun2025/exchange-project/pkg/logger"
 	"github.com/linxun2025/exchange-project/pkg/metrics"
 	"github.com/linxun2025/exchange-project/pkg/response"
+	"github.com/redis/go-redis/v9"
 )
 
 // RequestID 请求ID中间件
@@ -57,6 +59,9 @@ func AccessLog() gin.HandlerFunc {
 		// 记录指标
 		m.RecordHTTPRequest(c.Request.Method, path, status, latency)
 
+		// Phase 3: Record gateway request duration histogram
+		m.RecordGatewayRequest(c.Request.Method, path, status, latency)
+
 		logger.Info("access log",
 			logger.S("method", c.Request.Method),
 			logger.S("path", path),
@@ -86,6 +91,8 @@ func Recovery() gin.HandlerFunc {
 				// 记录错误指标
 				m := metrics.GetMetrics()
 				m.RecordHTTPRequest(c.Request.Method, c.Request.URL.Path, 500, time.Since(start))
+				// Phase 3: Record gateway request duration histogram on panic
+				m.RecordGatewayRequest(c.Request.Method, c.Request.URL.Path, 500, time.Since(start))
 
 				response.InternalServerError(c, "internal server error")
 				c.Abort()
@@ -115,8 +122,8 @@ func CORS() gin.HandlerFunc {
 
 // RateLimit 简单限流中间件（基于 IP）
 // 实际生产中应使用 Redis 实现分布式限流
+// Deprecated: 使用 NewRedisRateLimiter 和 RateLimitByPolicy 实现分布式限流
 func RateLimit(requests int, window time.Duration) gin.HandlerFunc {
-	// 这里实现一个简单的内存限流，生产环境应使用 Redis
 	type clientInfo struct {
 		count     int
 		resetTime time.Time
@@ -145,6 +152,7 @@ func RateLimit(requests int, window time.Duration) gin.HandlerFunc {
 				logger.S("client_ip", ip),
 				logger.S("path", c.Request.URL.Path),
 			)
+			metrics.GetMetrics().IncRateLimitBlocked("ip", ip, "legacy")
 			response.TooManyRequests(c, "rate limit exceeded")
 			c.Abort()
 			return
@@ -152,6 +160,19 @@ func RateLimit(requests int, window time.Duration) gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+// RateLimitMiddleware 创建基于配置文件的 Redis 限流中间件
+func RateLimitMiddleware(redisClient *redis.Client, cfg *config.RateLimitConfig) gin.HandlerFunc {
+	if !cfg.Enabled || len(cfg.Policies) == 0 {
+		return func(c *gin.Context) {
+			c.Next()
+		}
+	}
+
+	limiter := NewRedisRateLimiter(redisClient)
+	cb := NewCircuitBreaker()
+	return RateLimitByPolicy(limiter, cfg.Policies, cb)
 }
 
 // generateRequestID 生成请求ID

@@ -1,4 +1,4 @@
-// Package main API Gateway 主入口
+// Package main API Gateway main entry point
 package main
 
 import (
@@ -9,22 +9,25 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/linxun2025/exchange-project/internal/gateway/client"
 	"github.com/linxun2025/exchange-project/internal/gateway/router"
 	"github.com/linxun2025/exchange-project/pkg/config"
 	"github.com/linxun2025/exchange-project/pkg/logger"
 	"github.com/linxun2025/exchange-project/pkg/tracing"
 	"go.uber.org/zap"
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
 )
 
 func main() {
-	// 加载配置
+	// Load config
 	cfg, err := config.Load("")
 	if err != nil {
 		logger.Fatal("failed to load config", logger.Err(err))
 	}
 
-	// 初始化日志
+	// Initialize logger
 	if err := logger.Init(cfg.App.Environment); err != nil {
 		logger.Fatal("failed to init logger", logger.Err(err))
 	}
@@ -35,7 +38,7 @@ func main() {
 		logger.S("environment", cfg.App.Environment),
 	)
 
-	// 初始化 OpenTelemetry tracing
+	// Initialize OpenTelemetry tracing
 	otelEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 	tracingShutdown, err := tracing.Init(context.Background(), "gateway", otelEndpoint)
 	if err != nil {
@@ -50,7 +53,22 @@ func main() {
 		}()
 	}
 
-	// 初始化 gRPC 客户端
+	// Initialize database connection
+	db, err := gorm.Open(mysql.Open(cfg.Database.DSN()), &gorm.Config{})
+	if err != nil {
+		logger.Fatal("failed to connect to database", zap.Error(err))
+	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		logger.Fatal("failed to get underlying sql.DB", zap.Error(err))
+	}
+	sqlDB.SetMaxIdleConns(cfg.Database.MaxIdleConns)
+	sqlDB.SetMaxOpenConns(cfg.Database.MaxOpenConns)
+	sqlDB.SetConnMaxLifetime(time.Duration(cfg.Database.ConnMaxLife) * time.Minute)
+	defer sqlDB.Close()
+
+	// Initialize gRPC clients
 	clients, err := client.NewClients(&client.Config{
 		UserGRPCAddr:     cfg.GRPC.UserGRPCAddr,
 		OrderGRPCAddr:   cfg.GRPC.OrderGRPCAddr,
@@ -61,10 +79,36 @@ func main() {
 	}
 	defer clients.Close()
 
-	// 创建 Gin 引擎
-	r := router.NewRouter(cfg, clients)
+	// Initialize Redis client
+	redisClient := redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Addr(),
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+		PoolSize: cfg.Redis.PoolSize,
+	})
+	defer redisClient.Close()
 
-	// 创建 HTTP 服务器
+	// Test Redis connection
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		logger.Warn("failed to connect to Redis, rate limiting will be disabled", zap.Error(err))
+	} else {
+		logger.Info("connected to Redis for rate limiting",
+			logger.S("addr", cfg.Redis.Addr()),
+		)
+	}
+	cancel()
+
+	// Create Gin engine with saga support
+	r, outboxWorker := router.NewRouter(cfg, clients, redisClient, db)
+
+	// Start outbox worker
+	outboxWorker.Start(context.Background())
+	defer outboxWorker.Stop()
+
+	logger.Info("outbox worker started for saga orchestration")
+
+	// Create HTTP server
 	srv := &http.Server{
 		Addr:         cfg.Server.Address(),
 		Handler:      r,
@@ -73,7 +117,7 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// 启动服务器
+	// Start server
 	go func() {
 		logger.Info("server starting", logger.S("address", cfg.Server.Address()))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -81,15 +125,18 @@ func main() {
 		}
 	}()
 
-	// 等待中断信号
+	// Wait for interrupt signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
 	logger.Info("shutting down server...")
 
-	// 优雅关闭
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Stop Outbox Worker
+	outboxWorker.Stop()
+
+	// Graceful shutdown
+	ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {

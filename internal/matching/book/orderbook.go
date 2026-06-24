@@ -544,6 +544,21 @@ func (ob *OrderBook) GetSpread() decimal.Decimal {
 	return ask.Sub(bid)
 }
 
+// GetTotalOrders returns the total number of active orders (buy + sell)
+func (ob *OrderBook) GetTotalOrders() (buyCount, sellCount int) {
+	ob.mu.RLock()
+	defer ob.mu.RUnlock()
+	return len(ob.buyOrders), len(ob.sellOrders)
+}
+
+// AddOrderForRecovery adds an order directly to the order book without matching.
+// Used during crash recovery when restoring from a snapshot.
+func (ob *OrderBook) AddOrderForRecovery(order *OrderInBook) {
+	ob.mu.Lock()
+	defer ob.mu.Unlock()
+	ob.addToBookInternal(order)
+}
+
 // GenerateTradeID 生成交易ID
 func GenerateTradeID() string {
 	return fmt.Sprintf("TRD%d%s", time.Now().UnixNano(), uuidShort())

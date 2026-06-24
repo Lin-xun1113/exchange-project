@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-redis/redis/v8"
 	userpb "github.com/linxun2025/exchange-project/api/gen/user/v1"
 	"github.com/linxun2025/exchange-project/pkg/grpcx"
 	"github.com/linxun2025/exchange-project/pkg/logger"
@@ -178,4 +179,10 @@ func (c *UserClient) DeductAmount(ctx context.Context, req *userpb.DeductAmountR
 // AddAmount 增加余额
 func (c *UserClient) AddAmount(ctx context.Context, req *userpb.AddAmountRequest) (*userpb.AddAmountResponse, error) {
 	return c.client.AddAmount(ctx, req)
+}
+
+// Redis 返回底层的Redis客户端（用于OrderRepository）
+// 注意：这个方法仅用于Gateway内部的Saga编排，Gateway本身不使用Redis做缓存
+func (c *UserClient) Redis() *redis.Client {
+	return nil // Gateway不使用Redis客户端，需要在外部注入
 }
