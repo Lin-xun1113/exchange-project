@@ -340,3 +340,274 @@ flowchart TB
 - 网络延迟（100ns → 1ms+）
 - 网络分区处理
 - 分布式事务
+
+
+
+
+
+
+
+---
+
+# Actor 模型与 OrderBook 设计解析
+
+## 一、整体架构:两者的协作关系
+
+项目把"并发安全"和"撮合算法"分成了两层:
+
+- **撮合层** ([internal/matching/book/orderbook.go](internal/matching/book/orderbook.go)):纯数据结构 + 撮合算法,持有 `bids`/`asks` 跳表、买单/卖单切片、`priceLevels` 价格层表。
+- **调度层** ([internal/matching/engine/actor.go](internal/matching/engine/actor.go) + [engine.go](internal/matching/engine/engine.go)):每个交易对 (`symbol`) 一个 actor goroutine,独占一个 `*book.OrderBook`,所有写操作都串行经过 channel 流入。
+
+入口调用链:
+```
+gRPC SubmitOrder
+  → Matcher.SubmitOrder (WAL 写入)
+    → Matcher.dispatch
+      → act.cmdCh <- cmd        (异步入队,容量 1000)
+        → actor.run() 协程里 handleCommand
+          → book.AddOrder (零锁)
+            → cmd.replyCh <- result
+      ← gRPC handler 从 replyCh 拿结果
+```
+
+关键设计 ([engine.go:436-512](internal/matching/engine/engine.go)):
+```go
+func (m *Matcher) SubmitOrder(...) {
+    // 1. 先写 WAL(崩溃可恢复)
+    // 2. dispatch 到对应 symbol 的 actor
+    // 3. actor 内部 AddOrder + 写回复 channel
+    // 4. 撮合结果塞进 m.notify (容量 10000)异步持久化/广播
+}
+```
+
+### 协作流程图
+
+```mermaid
+flowchart LR
+    Client[gRPC Client]
+    subgraph Matcher[Matcher engine.go]
+        Submit[SubmitOrder]
+        WAL[(WAL)]
+        Dispatch[dispatch]
+        Notify[m.notify chan 10000]
+    end
+    subgraph Actor1[Actor BTC/USDT]
+        Run1[run goroutine]
+        CmdCh1[cmdCh 1000]
+        Book1[OrderBook]
+    end
+    subgraph Actor2[Actor ETH/USDT]
+        Run2[run goroutine]
+        CmdCh2[cmdCh 1000]
+        Book2[OrderBook]
+    end
+
+    Client --> Submit
+    Submit --> WAL
+    Submit --> Dispatch
+    Dispatch -->|"symbol=BTC"| CmdCh1
+    Dispatch -->|"symbol=ETH"| CmdCh2
+    CmdCh1 --> Run1
+    CmdCh2 --> Run2
+    Run1 -->|"零锁"| Book1
+    Run2 -->|"零锁"| Book2
+    Run1 -->|"replyCh"| Dispatch
+    Run2 -->|"replyCh"| Dispatch
+    Submit --> Notify
+    Notify -.->|async| Persist[(tradeRepo/publisher)]
+```
+
+BTC 和 ETH 完全独立 goroutine、零争用 —— 这是跨 symbol 高吞吐的关键。
+
+## 二、Actor 模型细节
+
+### 数据结构 ([actor.go:30-37](internal/matching/engine/actor.go))
+
+```go
+type actor struct {
+    symbol   string
+    cmdCh    chan command       // 下单,buffer=1000
+    cancelCh chan cancelCommand // 撤单,buffer=1000
+    book     *book.OrderBook    // 私有状态
+    cancel   context.CancelFunc
+    exited   atomic.Bool
+}
+```
+
+### 运行循环 ([actor.go:39-56](internal/matching/engine/actor.go))
+
+- 单一 `for-select` 循环,每次只处理一个 `command` 或 `cancelCommand`
+- 两个 channel 分开是设计选择:撤单优先级通常高于下单,独立通道避免互相阻塞
+- 入口用 `recover()` 包裹,单 symbol panic 不会炸进程
+
+### 生命周期 ([engine.go:365-396](internal/matching/engine/engine.go))
+
+- **延迟创建**:`getOrCreateActor` 在首次下单时才 `go act.run()`,冷门 symbol 不占 goroutine
+- **优雅退出**:`Shutdown()` 取消所有 actor context → 等待 `exitedChans` 全部 close → 才 `close(m.notify)`
+
+### 为什么这个模型能"高性能"
+
+1. **跨 symbol 零争用**:BTC/USDT 与 ETH/USDT 完全在两个 goroutine 上跑,只争抢一次 `actorsMu`(只在创建/查找 actor 时)
+2. **同 symbol 串行化天然契合价格-时间优先 (FIFO)**:`run()` 是单线程循环,先到的 `command` 先处理,语义直接对应撮合的"时间优先"
+3. **背压可控**:channel buffer = 1000,超出时 `dispatch` 通过 `ctx.Done()` 返回 timeout,网关层能感知到撮合引擎拥堵
+4. **Latency 基线 ~µs 级**:同进程 channel 投递纳秒级,无 syscall、无锁;瓶颈只在 `AddOrder` 算法本身和 channel 排队
+
+## 三、OrderBook 的锁策略(关键)
+
+### 锁分布图
+
+```mermaid
+flowchart TB
+    subgraph Write["写入路径 — 零锁"]
+        W1[actor.run → AddOrder]
+        W2[actor.run → CancelOrder]
+        W3[actor.run → cleanupOrdersInternal]
+    end
+    subgraph Read["读取路径 — RLock"]
+        R1[GetDepth]
+        R2[GetBestBid/Ask]
+        R3[GetOrderByID]
+        R4[GetTotalOrders]
+    end
+    subgraph Recovery["Snapshot/Recovery — Lock"]
+        S1[AddOrderForRecovery]
+        S2[BatchAddOrdersForRecovery]
+        S3[TakeSnapshot]
+    end
+
+    Write -.->|"actor 单线程 = 隐式锁"| OrderBook[(OrderBook)]
+    Read -->|"ob.mu.RLock"| OrderBook
+    Recovery -->|"ob.mu.Lock"| OrderBook
+```
+
+### 写入路径:零锁
+
+`AddOrder` ([orderbook.go:135-295](internal/matching/book/orderbook.go)) 和 `CancelOrder` ([orderbook.go:456-505](internal/matching/book/orderbook.go)) **完全没有 `Lock/Unlock` 调用**。这是有意的,因为它们的调用方是 actor 单 goroutine,不存在并发写。
+
+### 读取路径:RLock
+
+对外暴露的查询方法用 `RLock`,因为 gRPC handler 会在外部 goroutine 里调用:
+
+```go
+// orderbook.go:416-453, 508-552
+func (ob *OrderBook) GetDepth(depth int) (...)        { ob.mu.RLock(); ... }
+func (ob *OrderBook) GetOrderByID(orderID string)      { ob.mu.RLock(); ... }
+func (ob *OrderBook) GetBestBid() decimal.Decimal     { ob.mu.RLock(); ... }
+func (ob *OrderBook) GetBestAsk() decimal.Decimal     { ob.mu.RLock(); ... }
+func (ob *OrderBook) GetTotalOrders() (...)           { ob.mu.RLock(); ... }
+```
+
+写入路径里仍然调用了 `cleanupOrdersInternal`、`addToBookInternal` 等 "Internal" 后缀方法,这些**靠 actor 单线程语义来保证安全**(注释里写的是 "调用前需持有锁",但实现里实际上 actor 已经充当了那把锁)。
+
+### Snapshot/Recovery 路径:显式 Lock
+
+`AddOrderForRecovery` / `BatchAddOrdersForRecovery` ([orderbook.go:557-625](internal/matching/book/orderbook.go)) 显式 `ob.mu.Lock()`,因为恢复流程绕开了 actor,直接在外部 goroutine 里操作 book。
+
+### 跳表 ([skiplist.go](internal/matching/book/skiplist.go)) 内部还有独立锁
+
+- 每个 `SkipList[float64]` 内部有 `sync.Mutex`
+- 但 actor 模型下,跳表也只在 actor 单线程里被读写
+- 这层锁**实际是"防御性"冗余**:在 actor 模式下没必要,但代码保留了,以防未来有人绕过 actor 直接操作 book
+- 这是个轻微的设计冗余,可以作为后续优化点
+
+### 安全边界总结
+
+| 调用方                                    | 是否加锁 | 原因                    |
+| ----------------------------------------- | -------- | ----------------------- |
+| `actor.run` → `book.AddOrder/CancelOrder` | 否       | actor 单 goroutine 独占 |
+| gRPC 查询 → `GetDepth/GetBestBid/...`     | RLock    | 外部 goroutine 并发读   |
+| Snapshot/Recovery 流程                    | Lock     | 绕过 actor,需要独占     |
+| SkipList 内部                             | 内部 Mu  | 防御性,在 actor 下冗余  |
+
+这种"谁独占谁不加锁、谁并发谁加锁"的设计,把锁的覆盖范围缩到最小,既安全又低开销。
+
+### 安全性的核心论证
+
+**为什么"写入零锁"是安全的?** 关键在于 `actor.run` 是一个单线程的 `for-select` 循环:
+
+```go
+func (a *actor) run(ctx context.Context) {
+    for {
+        select {
+        case <-ctx.Done(): return
+        case cmd := <-a.cmdCh:
+            a.handleCommand(cmd)   // 单线程串行处理
+        case cmd := <-a.cancelCh:
+            a.handleCancelCommand(cmd)
+        }
+    }
+}
+```
+
+- `cmdCh` 同一时刻只有一个 goroutine 在消费 → 不存在并发写
+- `book` 字段没有暴露任何"绕过 actor"的写方法(只有 `AddOrderForRecovery` 用于启动恢复)
+- 读路径走 RLock,即使 actor 正在写也不会撕裂(`sync.RWMutex` 语义保证)
+- **FIFO 撮合天然成立**:先进 `cmdCh` 的订单先撮合,直接对应价格-时间优先
+
+并发测试 `TestMatcher_ConcurrentSameSymbol`(100 个 goroutine 抢同一个 symbol)验证了这一点 —— 所有买单价相同 → 按提交顺序成交,卖单被精确耗尽。
+
+## 四、性能数据(已有 benchmark)
+
+[internal/matching/book/latency_benchmark_test.go](internal/matching/book/latency_benchmark_test.go) 提供了多组基线:
+
+- `BenchmarkAddOrder_ColdStart` / `HotStart`:单线程 `AddOrder` 延迟
+- `BenchmarkConcurrent_*` 模式 (numGoroutines × ordersPerGoroutine) 测吞吐
+
+`TestMatcher_ConcurrentSameSymbol` 用 100 个 goroutine 同 symbol 并发下单,验证了 actor 模型下价格-时间顺序仍然正确(撮合后剩余卖单为 0,所有买单按 FIFO 成交)。
+
+## 五、与其他并发模式对比
+
+| 维度             | 本项目 (Per-Symbol Actor) | 全局 RWMutex | 全局 Mutex | 无锁队列 (Disruptor) |
+| ---------------- | ------------------------- | ------------ | ---------- | -------------------- |
+| 跨 symbol 吞吐   | **线性扩展**              | 受限         | 受限       | 线性                 |
+| 同 symbol 正确性 | **天然 FIFO**             | 需手动锁     | 需手动锁   | 需 CAS               |
+| 实现的复杂度     | 中                        | 低           | 最低       | 高                   |
+| 单 symbol 吞吐   | 单线程上限                | 多线程争用   | 多线程争用 | 接近硬件极限         |
+| 故障隔离         | **单 symbol 不影响其他**  | 单点故障     | 单点故障   | 单点故障             |
+| 调试难度         | **高(异步 channel)**      | 中           | 低         | 极高                 |
+| 持久化集成       | WAL/Snapshot 自然挂载     | 需手动协调   | 需手动协调 | 需额外设计           |
+
+### 选 actor 的具体理由
+
+1. **撮合算法本身是串行语义**:同一 symbol 内必须 FIFO,与其用锁强制串行,不如直接单线程跑
+2. **跨 symbol 才是真实瓶颈点**:真实交易所通常几百个交易对,跨 symbol 争用才是性能墙,actor 模型天然解决
+3. **故障隔离价值高**:某个交易对出 bug(如除零、panic)不会让整盘停摆
+4. **WAL/Snapshot 容易嵌入**:在 `SubmitOrder` 入口写 WAL、`TakeSnapshot` 异步落盘,与 actor 无缝衔接
+
+### Actor 模型的代价
+
+1. **调试不直观**:同一个订单的链路跨了 N 个 goroutine,要靠 trace 来关联
+2. **背压是隐式的**:channel buffer 满时表现为 timeout,需要监控 `cmdCh` 长度
+3. **同 symbol 没法利用多核**:单个热门交易对(BTC/USDT)仍是单线程撮合,这与高端交易所用 SPSC ring + 批量撮合的方案有差距
+4. **Actor 内 panic 需要 supervisor**:目前实现是 `recover + log`,actor 死了之后该 symbol 就停摆;未来需要重启机制
+
+## 六、改进方向(参考,不展开)
+
+- **同 symbol 多 actor**:按价格区间或订单 ID 哈希分片,内部再用一致性协议合并,提升单 symbol 吞吐
+- **批量撮合**:actor 循环里 `drain` 多个 command 后一次性处理,摊薄每笔订单的开销
+- **SPSC ring + CPU pinning**:极低延迟场景下替代 buffered channel
+- **去掉 SkipList 内部锁**:既然 actor 单线程,锁冗余;`sync.RWMutex` 在 `OrderBook` 的写入路径也可以一起去掉
+
+## 七、一句话总结
+
+> **本项目用 per-symbol actor + 零锁 orderbook,把"并发安全"问题转化成了"消息序列化"问题**:单 goroutine 独占 book + 写路径无锁,换取天然的 FIFO 撮合语义、跨 symbol 线性扩展和故障隔离;代价是同 symbol 吞吐被锁在单线程上限,且调试链路变长。
+
+## 涉及的关键文件
+
+- [internal/matching/engine/actor.go](internal/matching/engine/actor.go) — actor 结构与运行循环
+- [internal/matching/engine/engine.go](internal/matching/engine/engine.go) — actor 注册、dispatch、生命周期
+- [internal/matching/book/orderbook.go](internal/matching/book/orderbook.go) — 撮合算法 + 锁分布
+- [internal/matching/book/skiplist.go](internal/matching/book/skiplist.go) — 价格索引跳表
+- [openspec/changes/matching-per-symbol-actor/design.md](openspec/changes/matching-per-symbol-actor/design.md) — 原始设计文档
+- [docs/interview/01-actor-concurrency-model.md](docs/interview/01-actor-concurrency-model.md) — 已有面试材料
+
+---
+
+如果你想进一步深入,推荐三个方向:
+
+1. **追原始决策**:读 [openspec/changes/matching-per-symbol-actor/design.md](openspec/changes/matching-per-symbol-actor/design.md),那是这次重构的完整 ADR,包含被否决的方案和原因
+2. **跑 benchmark 看数据**:`go test -bench=BenchmarkAddOrder -benchmem ./internal/matching/book/...` 拿真实数字
+3. **看 WAL/Snapshot 怎么嵌入**:在 `SubmitOrder` 入口写 WAL、`TakeSnapshot` 异步落盘,与 actor 无缝衔接 —— 这块是 plan 没展开的另一条主线,需要的话我再单独分析
+
+
+

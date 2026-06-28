@@ -165,35 +165,70 @@ policies := []config.RateLimitPolicy{
 ```go
 func RateLimitByPolicy(limiter RateLimiter, policies []config.RateLimitPolicy, cb *gobreaker.CircuitBreaker) gin.HandlerFunc {
     return func(c *gin.Context) {
-        // 1. 提取限流标识
-        var identity string
-        switch policy.Scope {
-        case "ip":
-            identity = c.ClientIP()
-        case "user":
-            identity = c.GetString("user_id")
-        case "api":
-            identity = c.FullPath()
-        case "global":
-            identity = "global"
-        }
-        
-        // 2. 检查限流
-        result, err := limiter.Check(c.Request.Context(), policy.Scope, identity, &policy)
-        
-        // 3. 设置响应头
-        c.Header("X-RateLimit-Limit", fmt.Sprintf("%d", policy.MaxRequests))
-        c.Header("X-RateLimit-Remaining", fmt.Sprintf("%d", result.Remaining))
-        
-        if !result.Allowed {
-            c.Header("Retry-After", fmt.Sprintf("%d", result.RetryAfter))
-            c.AbortWithStatusJSON(429, gin.H{
-                "code":    429,
-                "message": "rate limit exceeded",
-            })
+        if len(policies) == 0 {
+            c.Next()
             return
         }
-        
+
+        path := c.Request.URL.Path
+
+        for _, policy := range policies {
+            if !policy.MatchPath(path) {
+                continue
+            }
+
+            // 1. 提取限流标识
+            identity := GetIdentity(c, policy.Scope)
+
+            // 2. 熔断器保护 + 限流检查
+            result, err := cb.Execute(func() (interface{}, error) {
+                checkResult, checkErr := limiter.Check(c.Request.Context(), policy.Scope, identity, &policy)
+                if checkErr != nil {
+                    return nil, checkErr
+                }
+                metrics.GetMetrics().RecordRateLimitRequest(policy.Scope, policy.Name)
+                if !checkResult.Allowed {
+                    return checkResult, fmt.Errorf("rate limit exceeded")
+                }
+                return checkResult, nil
+            })
+
+            if err != nil {
+                metrics.GetMetrics().IncRateLimitBlocked(policy.Scope, identity, policy.Name)
+
+                // 熔断器打开 → 503
+                if cb.State() == gobreaker.StateOpen {
+                    c.AbortWithStatusJSON(503, gin.H{
+                        "code":    503,
+                        "message": "service temporarily unavailable (circuit breaker open)",
+                    })
+                    return
+                }
+
+                // 限流 → 429
+                retryAfter := int64(0)
+                if res, ok := result.(*RateLimitResult); ok {
+                    retryAfter = res.RetryAfter
+                }
+                c.Header("Retry-After", fmt.Sprintf("%d", retryAfter))
+                c.AbortWithStatusJSON(429, gin.H{
+                    "code":    429,
+                    "message": "rate limit exceeded",
+                })
+                return
+            }
+
+            // 成功路径：设置响应头
+            if res, ok := result.(*RateLimitResult); ok {
+                c.Header("X-RateLimit-Limit", fmt.Sprintf("%d", res.Current+res.Remaining))
+                c.Header("X-RateLimit-Remaining", fmt.Sprintf("%d", res.Remaining))
+                c.Header("X-RateLimit-Scope", policy.Scope)
+            }
+
+            c.Next()
+            return
+        }
+
         c.Next()
     }
 }
@@ -458,15 +493,27 @@ script.Run(ctx, redis, keys, args...)
 
 ### Q3: Circuit Breaker 参数如何调优？
 
-**项目配置**：
+**项目限流熔断器配置**（保护 Redis 调用）：
 ```go
 ReadyToTrip: func(counts gobreaker.Counts) bool {
     // 条件 1: 至少 20 个请求（避免误判）
     // 条件 2: 失败率 >= 50%
     return counts.Requests >= 20 && failureRatio >= 0.5
 },
-Timeout: 30 * time.Second,  // 30 秒后尝试恢复
-MaxRequests: 100,  // 半开状态允许 100 个请求
+MaxRequests: 100,         // 半开状态允许 100 个请求
+Timeout:     30 * time.Second,  // 30 秒后尝试恢复
+```
+
+**项目 gRPC 熔断器配置**（保护下游微服务）：
+```go
+// 配置位置: internal/gateway/client/clients.go
+DefaultCircuitBreakerConfig:
+    MaxRequests:      3,                // 半开状态允许 3 个请求
+    Interval:         10 * time.Second, // Closed 状态每 10s 重置统计
+    Timeout:          30 * time.Second, // 30 秒后尝试恢复
+    FailureThreshold: 5,                // 连续 5 次失败触发熔断
+
+// 触发条件: ConsecutiveFailures >= FailureThreshold
 ```
 
 **调优原则**：
@@ -490,16 +537,44 @@ MaxRequests: 100,  // 半开状态允许 100 个请求
 
 **项目实现**：
 ```go
-if !result.Allowed {
-    c.Header("Retry-After", fmt.Sprintf("%d", result.RetryAfter))
+result, err := cb.Execute(func() (interface{}, error) {
+    checkResult, checkErr := limiter.Check(ctx, policy.Scope, identity, &policy)
+    if checkErr != nil {
+        return nil, checkErr
+    }
+    if !checkResult.Allowed {
+        return checkResult, fmt.Errorf("rate limit exceeded")
+    }
+    return checkResult, nil
+})
+
+if err != nil {
+    // 熔断器打开 → 503
+    if cb.State() == gobreaker.StateOpen {
+        c.AbortWithStatusJSON(503, gin.H{
+            "code":    503,
+            "message": "service temporarily unavailable (circuit breaker open)",
+        })
+        return
+    }
+
+    // 限流 → 429
+    retryAfter := int64(0)
+    if res, ok := result.(*RateLimitResult); ok {
+        retryAfter = res.RetryAfter
+    }
+    c.Header("Retry-After", fmt.Sprintf("%d", retryAfter))
     c.AbortWithStatusJSON(429, gin.H{
         "code":    429,
         "message": "rate limit exceeded",
-        "retry_after_ms": result.RetryAfter,
     })
     return
 }
 ```
+
+**两种错误的区别**：
+- **503（熔断）**：Redis 持续故障，快速失败，不应重试
+- **429（限流）**：请求过多，应按 `Retry-After` 等待后重试
 
 **客户端重试策略**：
 ```go
@@ -633,3 +708,11 @@ func (tb *TokenBucket) Allow(n int64) bool {
                 │  (分布式限流)    │ │  (分布式限流)    │ │  (分布式限流)    │
                 └─────────────────┘ └─────────────────┘ └─────────────────┘
 ```
+
+---
+
+## 相关文档
+
+本文档聚焦于"限流"场景下的熔断器使用。如需了解项目熔断器的完整架构（包括 gRPC 客户端层熔断器、状态机详解、与重试/超时的协作等），请参阅：
+
+- [gobreaker 熔断器详解（项目实践）](10-gobreaker-circuit-breaker.md)

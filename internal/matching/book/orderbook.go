@@ -12,19 +12,19 @@ import (
 
 // OrderInBook 订单簿中的订单
 type OrderInBook struct {
-	ID             int64           `json:"id"`
-	OrderID        string          `json:"order_id"`
-	UserID         int64           `json:"user_id"`
-	Symbol         string          `json:"symbol"`
-	Side           model.OrderSide `json:"side"`
-	OrderType      model.OrderType `json:"order_type"`
-	Price          decimal.Decimal `json:"price"`
-	Quantity       decimal.Decimal `json:"quantity"`
-	FilledQuantity decimal.Decimal `json:"filled_quantity"`
-	RemainingQty   decimal.Decimal `json:"remaining_quantity"`
-	UnfilledQty    decimal.Decimal `json:"unfilled_quantity"`
+	ID             int64             `json:"id"`
+	OrderID        string            `json:"order_id"`
+	UserID         int64             `json:"user_id"`
+	Symbol         string            `json:"symbol"`
+	Side           model.OrderSide   `json:"side"`
+	OrderType      model.OrderType   `json:"order_type"`
+	Price          decimal.Decimal   `json:"price"`
+	Quantity       decimal.Decimal   `json:"quantity"`
+	FilledQuantity decimal.Decimal   `json:"filled_quantity"`
+	RemainingQty   decimal.Decimal   `json:"remaining_quantity"`
+	UnfilledQty    decimal.Decimal   `json:"unfilled_quantity"`
 	Status         model.OrderStatus `json:"status"`
-	CreatedAt      int64           `json:"created_at"` // 纳秒时间戳，用于 FIFO
+	CreatedAt      int64             `json:"created_at"` // 纳秒时间戳，用于 FIFO
 }
 
 // NewOrderInBook 从订单创建订单簿订单
@@ -99,18 +99,18 @@ type Trade struct {
 
 // PriceLevel represents a price level in the order book.
 type PriceLevel struct {
-	Price   float64
-	Orders  []*OrderInBook
+	Price  float64
+	Orders []*OrderInBook
 }
 
 // OrderBook 订单簿
 type OrderBook struct {
 	symbol      string
-	mu          sync.RWMutex // protects all fields below during concurrent reads/writes
-	buyOrders   []*OrderInBook // 买单列表，按价格降序
-	sellOrders  []*OrderInBook // 卖单列表，按价格升序
-	bids        *SkipList[float64] // 价格索引：最高买价 = SeekLast()
-	asks        *SkipList[float64] // 价格索引：最低卖价 = SeekFirst()
+	mu          sync.RWMutex            // protects all fields below during concurrent reads/writes
+	buyOrders   []*OrderInBook          // 买单列表，按价格降序
+	sellOrders  []*OrderInBook          // 卖单列表，按价格升序
+	bids        *SkipList[float64]      // 价格索引：最高买价 = SeekLast()
+	asks        *SkipList[float64]      // 价格索引：最低卖价 = SeekFirst()
 	priceLevels map[float64]*PriceLevel // 价格级别映射
 }
 
@@ -118,10 +118,10 @@ type OrderBook struct {
 func NewOrderBook(symbol string) *OrderBook {
 	return &OrderBook{
 		symbol:      symbol,
-		buyOrders:  make([]*OrderInBook, 0),
-		sellOrders: make([]*OrderInBook, 0),
-		bids: NewSkipList(func(a, b float64) bool { return a < b }),
-		asks: NewSkipList(func(a, b float64) bool { return a < b }),
+		buyOrders:   make([]*OrderInBook, 0),
+		sellOrders:  make([]*OrderInBook, 0),
+		bids:        NewSkipList(func(a, b float64) bool { return a < b }),
+		asks:        NewSkipList(func(a, b float64) bool { return a < b }),
 		priceLevels: make(map[float64]*PriceLevel),
 	}
 }
@@ -553,10 +553,75 @@ func (ob *OrderBook) GetTotalOrders() (buyCount, sellCount int) {
 
 // AddOrderForRecovery adds an order directly to the order book without matching.
 // Used during crash recovery when restoring from a snapshot.
+// Note: For batch recovery, use BatchAddOrdersForRecovery for better performance.
 func (ob *OrderBook) AddOrderForRecovery(order *OrderInBook) {
 	ob.mu.Lock()
 	defer ob.mu.Unlock()
 	ob.addToBookInternal(order)
+}
+
+// BatchAddOrdersForRecovery adds multiple orders to the order book without matching.
+// This is optimized for crash recovery - it uses O(n log n) sorting instead of O(n²) insertions.
+// Should only be called during recovery when no other operations are happening.
+func (ob *OrderBook) BatchAddOrdersForRecovery(orders []*OrderInBook) {
+	ob.mu.Lock()
+	defer ob.mu.Unlock()
+
+	if len(orders) == 0 {
+		return
+	}
+
+	var buys []*OrderInBook
+	var sells []*OrderInBook
+
+	for _, o := range orders {
+		switch o.Side {
+		case model.OrderSideBuy:
+			buys = append(buys, o)
+		case model.OrderSideSell:
+			sells = append(sells, o)
+		}
+	}
+
+	// Sort: buys by price DESC, sells by price ASC (preserving CreatedAt order for same price)
+	sort.Slice(buys, func(i, j int) bool {
+		if buys[i].Price.Equal(buys[j].Price) {
+			return buys[i].CreatedAt < buys[j].CreatedAt
+		}
+		return buys[i].Price.GreaterThan(buys[j].Price)
+	})
+
+	sort.Slice(sells, func(i, j int) bool {
+		if sells[i].Price.Equal(sells[j].Price) {
+			return sells[i].CreatedAt < sells[j].CreatedAt
+		}
+		return sells[i].Price.LessThan(sells[j].Price)
+	})
+
+	// Append all orders and build price levels
+	for _, o := range buys {
+		ob.buyOrders = append(ob.buyOrders, o)
+		price := o.Price.InexactFloat64()
+		pl, exists := ob.priceLevels[price]
+		if !exists {
+			pl = &PriceLevel{Price: price, Orders: make([]*OrderInBook, 0)}
+			ob.priceLevels[price] = pl
+			ob.bids.Insert(price)
+		}
+		pl.Orders = append(pl.Orders, o)
+	}
+
+	for _, o := range sells {
+		ob.sellOrders = append(ob.sellOrders, o)
+		price := o.Price.InexactFloat64()
+		pl, exists := ob.priceLevels[price]
+		if !exists {
+			pl = &PriceLevel{Price: price, Orders: make([]*OrderInBook, 0)}
+			ob.priceLevels[price] = pl
+			ob.asks.Insert(price)
+		}
+		pl.Orders = append(pl.Orders, o)
+	}
 }
 
 // GenerateTradeID 生成交易ID

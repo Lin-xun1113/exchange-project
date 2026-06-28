@@ -1,5 +1,6 @@
 package book
 
+// 此处跳表的mutex锁为防御性冗余设计，实际SkipList在actor单线程的Orderbook里跑，不需要加锁，可删除
 import (
 	"math/rand"
 	"sync"
@@ -245,8 +246,8 @@ func (n *SkipListNode[K]) Prev() *SkipListNode[K] {
 
 // SkipListIterator iterates over a skip list.
 type SkipListIterator[K any] struct {
-	sl    *SkipList[K]
-	node  *SkipListNode[K]
+	sl   *SkipList[K]
+	node *SkipListNode[K]
 }
 
 // Iter returns an iterator starting from the given node.

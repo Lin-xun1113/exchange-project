@@ -65,8 +65,8 @@ logs/
 *.pid
 
 # 撮合引擎 WAL / Snapshot(见 ROADMAP 阶段 ⑦)
-wal/
-snapshot/
+# wal/
+# snapshot/
 *.wal
 *.snap
 

@@ -6,11 +6,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/redis/go-redis/v9"
-	"github.com/sony/gobreaker"
 	"github.com/linxun2025/exchange-project/pkg/config"
 	"github.com/linxun2025/exchange-project/pkg/logger"
 	"github.com/linxun2025/exchange-project/pkg/metrics"
+	"github.com/redis/go-redis/v9"
+	"github.com/sony/gobreaker"
 )
 
 // CircuitBreakerConfig 熔断器配置
@@ -21,20 +21,20 @@ type CircuitBreakerConfig struct {
 }
 
 var cbConfig = CircuitBreakerConfig{
-	Name:    "matching-service",
-	MaxReq:  100,
-	Timeout: 30 * time.Second,
+	Name:    "rate-limit-service",
+	MaxReq:  10,
+	Timeout: 10 * time.Second,
 }
 
 // NewCircuitBreaker 创建熔断器
 func NewCircuitBreaker() *gobreaker.CircuitBreaker {
 	return gobreaker.NewCircuitBreaker(gobreaker.Settings{
-		Name: cbConfig.Name,
+		Name:        cbConfig.Name,
 		MaxRequests: cbConfig.MaxReq,
 		Timeout:     cbConfig.Timeout,
 		ReadyToTrip: func(counts gobreaker.Counts) bool {
 			failureRatio := float64(counts.TotalFailures) / float64(counts.Requests)
-			return counts.Requests >= 20 && failureRatio >= 0.5
+			return counts.Requests >= 20 && failureRatio >= 0.5 && counts.ConsecutiveFailures >= 5
 		},
 		OnStateChange: func(name string, from gobreaker.State, to gobreaker.State) {
 			logger.Warn("circuit breaker state changed",
@@ -91,9 +91,9 @@ var (
 )
 
 type RateLimitResult struct {
-	Allowed   bool
-	Current   int64
-	Remaining int64
+	Allowed    bool
+	Current    int64
+	Remaining  int64
 	RetryAfter int64
 }
 
@@ -197,27 +197,20 @@ func RateLimitByPolicy(limiter RateLimiter, policies []config.RateLimitPolicy, c
 			result, err := cb.Execute(func() (interface{}, error) {
 				result, checkErr := limiter.Check(c.Request.Context(), policy.Scope, identity, &policy)
 				if checkErr != nil {
-					return nil, checkErr
+					return nil, checkErr // Redis error → triggers circuit breaker
 				}
-
-				// Record rate limit request metric
-				metrics.GetMetrics().RecordRateLimitRequest(policy.Scope, policy.Name)
-
-				if !result.Allowed {
-					return result, fmt.Errorf("rate limit exceeded")
-				}
-				return result, nil
+				return result, nil // No error, rate limit check succeeded
 			})
 
 			if err != nil {
-				logger.Warn("rate limit exceeded or circuit breaker open",
+				// Only Redis errors reach here
+				logger.Warn("rate limit check failed",
 					logger.S("client_ip", c.ClientIP()),
 					logger.S("path", path),
 					logger.S("policy", policy.Name),
 					logger.S("scope", policy.Scope),
 					logger.S("error", err.Error()),
 				)
-				metrics.GetMetrics().IncRateLimitBlocked(policy.Scope, identity, policy.Name)
 
 				// Check if circuit breaker is open
 				if cb.State() == gobreaker.StateOpen {
@@ -227,22 +220,24 @@ func RateLimitByPolicy(limiter RateLimiter, policies []config.RateLimitPolicy, c
 					})
 					return
 				}
-
-				// Extract RetryAfter from result if available
-				retryAfter := int64(0)
-				if res, ok := result.(*RateLimitResult); ok {
-					retryAfter = res.RetryAfter
-				}
-				c.Header("Retry-After", fmt.Sprintf("%d", retryAfter))
-				c.AbortWithStatusJSON(429, gin.H{
-					"code":    429,
-					"message": "rate limit exceeded",
-				})
-				return
 			}
 
-			// Set rate limit headers for successful requests
+			// Rate limit hit is handled outside circuit breaker logic
 			if res, ok := result.(*RateLimitResult); ok {
+				// Record rate limit request metric
+				metrics.GetMetrics().RecordRateLimitRequest(policy.Scope, policy.Name)
+
+				if !res.Allowed {
+					metrics.GetMetrics().IncRateLimitBlocked(policy.Scope, identity, policy.Name)
+					c.Header("Retry-After", fmt.Sprintf("%d", res.RetryAfter))
+					c.AbortWithStatusJSON(429, gin.H{
+						"code":    429,
+						"message": "rate limit exceeded",
+					})
+					return
+				}
+
+				// Set rate limit headers for successful requests
 				c.Header("X-RateLimit-Limit", fmt.Sprintf("%d", res.Current+res.Remaining))
 				c.Header("X-RateLimit-Remaining", fmt.Sprintf("%d", res.Remaining))
 				c.Header("X-RateLimit-Scope", policy.Scope)
