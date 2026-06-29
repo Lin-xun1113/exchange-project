@@ -40,8 +40,8 @@
 - [x] **事务性 Outbox 模式** - 可靠消息投递, 指数退避 + jitter 重试
 - [x] **分布式限流** - Sliding Window 算法 + Redis
 - [x] **熔断器保护** - Circuit Breaker (gobreaker)
-- [x] **WAL + Snapshot 恢复** - 崩溃恢复机制
-- [x] **Prometheus 指标扩展** - 覆盖 HTTP/gRPC/撮合/Saga/Outbox/限流
+- [x] **WAL + Snapshot 恢复** - Group Commit fsync + 目录同步，零数据丢失
+- [x] **Prometheus 指标扩展** - 覆盖 HTTP/gRPC/撮合/Saga/Outbox/限流/WAL
 
 ## 支持的订单类型
 
