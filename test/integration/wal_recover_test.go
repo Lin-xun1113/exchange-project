@@ -32,11 +32,12 @@ func TestWALRecovery_BasicRecovery(t *testing.T) {
 	cfg := engine.Config{
 		WALDir:      walDir,
 		SnapshotDir: snapshotDir,
+		WALSyncMode: wal.SyncNone,
 	}
 	m := engine.NewMatcher(cfg)
 	require.NotNil(t, m)
 
-	walManager := engine.NewWALManager(walDir)
+	walManager := engine.NewWALManager(walDir, wal.SyncNone, 0, 0)
 	m.SetWALManager(walManager)
 
 	ctx := context.Background()
@@ -69,11 +70,12 @@ func TestWALRecovery_BasicRecovery(t *testing.T) {
 	cfg2 := engine.Config{
 		WALDir:      walDir,
 		SnapshotDir: snapshotDir,
+		WALSyncMode: wal.SyncNone,
 	}
 	m2 := engine.NewMatcher(cfg2)
 	require.NotNil(t, m2)
 
-	walManager2 := engine.NewWALManager(walDir)
+	walManager2 := engine.NewWALManager(walDir, wal.SyncNone, 0, 0)
 	m2.SetWALManager(walManager2)
 
 	err = m2.Recover(engine.RecoveryConfig{
@@ -105,11 +107,12 @@ func TestWALRecovery_WithSnapshot(t *testing.T) {
 		WALDir:              walDir,
 		SnapshotDir:         snapshotDir,
 		MaxTradesPerSnapshot: 5, // Trigger snapshot every 5 trades
+		WALSyncMode:         wal.SyncNone,
 	}
 	m := engine.NewMatcher(cfg)
 	require.NotNil(t, m)
 
-	walManager := engine.NewWALManager(walDir)
+	walManager := engine.NewWALManager(walDir, wal.SyncNone, 0, 0)
 	m.SetWALManager(walManager)
 	m.SetSnapshotDir(snapshotDir)
 
@@ -141,11 +144,12 @@ func TestWALRecovery_WithSnapshot(t *testing.T) {
 	cfg2 := engine.Config{
 		WALDir:      walDir,
 		SnapshotDir: snapshotDir,
+		WALSyncMode: wal.SyncNone,
 	}
 	m2 := engine.NewMatcher(cfg2)
 	require.NotNil(t, m2)
 
-	walManager2 := engine.NewWALManager(walDir)
+	walManager2 := engine.NewWALManager(walDir, wal.SyncNone, 0, 0)
 	m2.SetWALManager(walManager2)
 
 	err = m2.Recover(engine.RecoveryConfig{
@@ -173,9 +177,10 @@ func TestWALRecovery_PartialWALAfterSnapshot(t *testing.T) {
 		m := engine.NewMatcher(engine.Config{
 			WALDir:      walDir,
 			SnapshotDir: snapshotDir,
+			WALSyncMode: wal.SyncNone,
 		})
 
-		walManager := engine.NewWALManager(walDir)
+		walManager := engine.NewWALManager(walDir, wal.SyncNone, 0, 0)
 		m.SetWALManager(walManager)
 		m.SetSnapshotDir(snapshotDir)
 
@@ -211,9 +216,10 @@ func TestWALRecovery_PartialWALAfterSnapshot(t *testing.T) {
 		m := engine.NewMatcher(engine.Config{
 			WALDir:      walDir,
 			SnapshotDir: snapshotDir,
+			WALSyncMode: wal.SyncNone,
 		})
 
-		walManager := engine.NewWALManager(walDir)
+		walManager := engine.NewWALManager(walDir, wal.SyncNone, 0, 0)
 		m.SetWALManager(walManager)
 
 		err := m.Recover(engine.RecoveryConfig{
@@ -242,9 +248,10 @@ func TestWALRecovery_CancelOrderRecovery(t *testing.T) {
 		m := engine.NewMatcher(engine.Config{
 			WALDir:      walDir,
 			SnapshotDir: snapshotDir,
+			WALSyncMode: wal.SyncNone,
 		})
 
-		walManager := engine.NewWALManager(walDir)
+		walManager := engine.NewWALManager(walDir, wal.SyncNone, 0, 0)
 		m.SetWALManager(walManager)
 
 		ctx := context.Background()
@@ -270,9 +277,10 @@ func TestWALRecovery_CancelOrderRecovery(t *testing.T) {
 		m := engine.NewMatcher(engine.Config{
 			WALDir:      walDir,
 			SnapshotDir: snapshotDir,
+			WALSyncMode: wal.SyncNone,
 		})
 
-		walManager := engine.NewWALManager(walDir)
+		walManager := engine.NewWALManager(walDir, wal.SyncNone, 0, 0)
 		m.SetWALManager(walManager)
 
 		err := m.Recover(engine.RecoveryConfig{
@@ -306,9 +314,10 @@ func TestWALRecovery_ConcurrentOperations(t *testing.T) {
 		m := engine.NewMatcher(engine.Config{
 			WALDir:      walDir,
 			SnapshotDir: snapshotDir,
+			WALSyncMode: wal.SyncNone,
 		})
 
-		walManager := engine.NewWALManager(walDir)
+		walManager := engine.NewWALManager(walDir, wal.SyncNone, 0, 0)
 		m.SetWALManager(walManager)
 		m.SetSnapshotDir(snapshotDir)
 
@@ -345,9 +354,10 @@ func TestWALRecovery_ConcurrentOperations(t *testing.T) {
 		m := engine.NewMatcher(engine.Config{
 			WALDir:      walDir,
 			SnapshotDir: snapshotDir,
+			WALSyncMode: wal.SyncNone,
 		})
 
-		walManager := engine.NewWALManager(walDir)
+		walManager := engine.NewWALManager(walDir, wal.SyncNone, 0, 0)
 		m.SetWALManager(walManager)
 
 		err := m.Recover(engine.RecoveryConfig{
@@ -379,9 +389,10 @@ func TestWALRecovery_NoSnapshotNoWAL(t *testing.T) {
 	m := engine.NewMatcher(engine.Config{
 		WALDir:      walDir,
 		SnapshotDir: snapshotDir,
+		WALSyncMode: wal.SyncNone,
 	})
 
-	walManager := engine.NewWALManager(walDir)
+	walManager := engine.NewWALManager(walDir, wal.SyncNone, 0, 0)
 	m.SetWALManager(walManager)
 
 	// Recovery on empty directories should not error
@@ -410,9 +421,10 @@ func TestWALRecovery_ManualSnapshotAndRecovery(t *testing.T) {
 		m := engine.NewMatcher(engine.Config{
 			WALDir:      walDir,
 			SnapshotDir: snapshotDir,
+			WALSyncMode: wal.SyncNone,
 		})
 
-		walManager := engine.NewWALManager(walDir)
+		walManager := engine.NewWALManager(walDir, wal.SyncNone, 0, 0)
 		m.SetWALManager(walManager)
 		m.SetSnapshotDir(snapshotDir)
 
@@ -453,9 +465,10 @@ func TestWALRecovery_ManualSnapshotAndRecovery(t *testing.T) {
 		m := engine.NewMatcher(engine.Config{
 			WALDir:      walDir,
 			SnapshotDir: snapshotDir,
+			WALSyncMode: wal.SyncNone,
 		})
 
-		walManager := engine.NewWALManager(walDir)
+		walManager := engine.NewWALManager(walDir, wal.SyncNone, 0, 0)
 		m.SetWALManager(walManager)
 
 		err := m.Recover(engine.RecoveryConfig{
@@ -490,10 +503,11 @@ func TestSnapshotAndWAL_EndToEnd(t *testing.T) {
 		cfg := engine.Config{
 			WALDir:      walDir,
 			SnapshotDir: snapshotDir,
+			WALSyncMode: wal.SyncNone,
 		}
 		m := engine.NewMatcher(cfg)
 
-		walManager := engine.NewWALManager(walDir)
+		walManager := engine.NewWALManager(walDir, wal.SyncNone, 0, 0)
 		m.SetWALManager(walManager)
 		m.SetSnapshotDir(snapshotDir)
 
@@ -555,9 +569,10 @@ func TestSnapshotAndWAL_EndToEnd(t *testing.T) {
 	m := engine.NewMatcher(engine.Config{
 		WALDir:      walDir,
 		SnapshotDir: snapshotDir,
+		WALSyncMode: wal.SyncNone,
 	})
 
-	walManager := engine.NewWALManager(walDir)
+	walManager := engine.NewWALManager(walDir, wal.SyncNone, 0, 0)
 	m.SetWALManager(walManager)
 
 	err := m.Recover(engine.RecoveryConfig{
@@ -585,9 +600,10 @@ func TestWALRecovery_VerifyWALEntries(t *testing.T) {
 		m := engine.NewMatcher(engine.Config{
 			WALDir:      walDir,
 			SnapshotDir: snapshotDir,
+			WALSyncMode: wal.SyncNone,
 		})
 
-		walManager := engine.NewWALManager(walDir)
+		walManager := engine.NewWALManager(walDir, wal.SyncNone, 0, 0)
 		m.SetWALManager(walManager)
 		m.SetSnapshotDir(snapshotDir)
 
@@ -633,9 +649,10 @@ func TestWALRecovery_VerifyWALEntries(t *testing.T) {
 		m := engine.NewMatcher(engine.Config{
 			WALDir:      walDir,
 			SnapshotDir: snapshotDir,
+			WALSyncMode: wal.SyncNone,
 		})
 
-		walManager := engine.NewWALManager(walDir)
+		walManager := engine.NewWALManager(walDir, wal.SyncNone, 0, 0)
 		m.SetWALManager(walManager)
 
 		err := m.Recover(engine.RecoveryConfig{
@@ -662,10 +679,11 @@ func TestWALRecovery_CleanShutdown(t *testing.T) {
 	cfg := engine.Config{
 		WALDir:      walDir,
 		SnapshotDir: snapshotDir,
+		WALSyncMode: wal.SyncNone,
 	}
 	m := engine.NewMatcher(cfg)
 
-	walManager := engine.NewWALManager(walDir)
+	walManager := engine.NewWALManager(walDir, wal.SyncNone, 0, 0)
 	m.SetWALManager(walManager)
 	m.SetSnapshotDir(snapshotDir)
 
@@ -687,7 +705,7 @@ func TestWALRecovery_CleanShutdown(t *testing.T) {
 	walManager.Close()
 
 	// Verify WAL is closed properly by trying to open it again
-	w, err := wal.NewWAL(symbol, walDir)
+	w, err := wal.NewWAL(symbol, walDir, wal.SyncNone, 0, 0)
 	require.NoError(t, err)
 	defer w.Close()
 

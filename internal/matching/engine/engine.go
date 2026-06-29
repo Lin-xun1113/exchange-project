@@ -92,20 +92,30 @@ type Config struct {
 	SnapshotDir         string
 	MaxTradesPerSnapshot int
 	SnapshotInterval    time.Duration
+	// WAL sync configuration
+	WALSyncMode      wal.SyncMode
+	WALSyncEvery     uint64
+	WALSyncInterval  time.Duration
 }
 
 // WALManager manages WAL instances per symbol.
 type WALManager struct {
-	mu      sync.Mutex
-	walDir  string
-	wals    map[string]*wal.WAL
+	mu           sync.Mutex
+	walDir       string
+	wals         map[string]*wal.WAL
+	syncMode     wal.SyncMode
+	syncEvery    uint64
+	syncInterval time.Duration
 }
 
 // NewWALManager creates a new WAL manager.
-func NewWALManager(walDir string) *WALManager {
+func NewWALManager(walDir string, syncMode wal.SyncMode, syncEvery uint64, syncInterval time.Duration) *WALManager {
 	return &WALManager{
-		walDir: walDir,
-		wals:   make(map[string]*wal.WAL),
+		walDir:       walDir,
+		wals:         make(map[string]*wal.WAL),
+		syncMode:     syncMode,
+		syncEvery:    syncEvery,
+		syncInterval: syncInterval,
 	}
 }
 
@@ -118,7 +128,7 @@ func (m *WALManager) GetWAL(symbol string) (*wal.WAL, error) {
 		return w, nil
 	}
 
-	w, err := wal.NewWAL(symbol, m.walDir)
+	w, err := wal.NewWAL(symbol, m.walDir, m.syncMode, m.syncEvery, m.syncInterval)
 	if err != nil {
 		return nil, err
 	}
@@ -874,8 +884,8 @@ func (m *Matcher) Recover(cfg RecoveryConfig) error {
 			}
 		}
 
-		// Replay WAL.
-		w, err := wal.NewWAL(symbol, cfg.WALDir)
+		// Replay WAL - use SyncNone for recovery since we only read
+		w, err := wal.NewWAL(symbol, cfg.WALDir, wal.SyncNone, 0, 0)
 		var entriesReplayed int
 		if err != nil {
 			logger.Warn("failed to open WAL for replay",

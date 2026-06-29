@@ -14,7 +14,7 @@ func TestWAL_NewWAL(t *testing.T) {
 	dir := t.TempDir()
 	symbol := "BTC/USDT"
 
-	w, err := NewWAL(symbol, dir)
+	w, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 	require.NotNil(t, w)
 
@@ -34,7 +34,7 @@ func TestWAL_Append_Command(t *testing.T) {
 	dir := t.TempDir()
 	symbol := "ETH/USDT"
 
-	w, err := NewWAL(symbol, dir)
+	w, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 	defer w.Close()
 
@@ -60,7 +60,7 @@ func TestWAL_Append_Cancel(t *testing.T) {
 	dir := t.TempDir()
 	symbol := "BTC/USDT"
 
-	w, err := NewWAL(symbol, dir)
+	w, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 	defer w.Close()
 
@@ -80,7 +80,7 @@ func TestWAL_Append_Trade(t *testing.T) {
 	dir := t.TempDir()
 	symbol := "BTC/USDT"
 
-	w, err := NewWAL(symbol, dir)
+	w, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 	defer w.Close()
 
@@ -108,7 +108,7 @@ func TestWAL_Append_Multiple(t *testing.T) {
 	dir := t.TempDir()
 	symbol := "BTC/USDT"
 
-	w, err := NewWAL(symbol, dir)
+	w, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 	defer w.Close()
 
@@ -137,7 +137,7 @@ func TestWAL_LastLSN_Empty(t *testing.T) {
 	dir := t.TempDir()
 	symbol := "BTC/USDT"
 
-	w, err := NewWAL(symbol, dir)
+	w, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 	defer w.Close()
 
@@ -149,7 +149,7 @@ func TestWAL_LastLSN_AfterAppend(t *testing.T) {
 	dir := t.TempDir()
 	symbol := "BTC/USDT"
 
-	w, err := NewWAL(symbol, dir)
+	w, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 	defer w.Close()
 
@@ -178,7 +178,7 @@ func TestWAL_LastLSN_Persists(t *testing.T) {
 
 	// Create and append
 	{
-		w, err := NewWAL(symbol, dir)
+		w, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 		require.NoError(t, err)
 
 		entry := &Entry{
@@ -202,7 +202,7 @@ func TestWAL_LastLSN_Persists(t *testing.T) {
 
 	// Reopen and check LSN
 	{
-		w, err := NewWAL(symbol, dir)
+		w, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 		require.NoError(t, err)
 		defer w.Close()
 
@@ -214,7 +214,7 @@ func TestWAL_Replay_Empty(t *testing.T) {
 	dir := t.TempDir()
 	symbol := "BTC/USDT"
 
-	w, err := NewWAL(symbol, dir)
+	w, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 	defer w.Close()
 
@@ -231,7 +231,7 @@ func TestWAL_Replay_FromLSN(t *testing.T) {
 	dir := t.TempDir()
 	symbol := "BTC/USDT"
 
-	w, err := NewWAL(symbol, dir)
+	w, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 
 	// Append 5 entries
@@ -253,7 +253,7 @@ func TestWAL_Replay_FromLSN(t *testing.T) {
 	w.Close()
 
 	// Reopen and replay from LSN 2
-	w2, err := NewWAL(symbol, dir)
+	w2, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 	defer w2.Close()
 
@@ -273,7 +273,7 @@ func TestWAL_Replay_All(t *testing.T) {
 	dir := t.TempDir()
 	symbol := "BTC/USDT"
 
-	w, err := NewWAL(symbol, dir)
+	w, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 
 	// Append mixed entries
@@ -318,7 +318,7 @@ func TestWAL_Replay_All(t *testing.T) {
 	w.Close()
 
 	// Reopen and replay all
-	w2, err := NewWAL(symbol, dir)
+	w2, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 	defer w2.Close()
 
@@ -353,7 +353,7 @@ func TestWAL_Replay_Error(t *testing.T) {
 	dir := t.TempDir()
 	symbol := "BTC/USDT"
 
-	w, err := NewWAL(symbol, dir)
+	w, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 
 	entry := &Entry{
@@ -371,7 +371,7 @@ func TestWAL_Replay_Error(t *testing.T) {
 	require.NoError(t, err)
 	w.Close()
 
-	w2, err := NewWAL(symbol, dir)
+	w2, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 	defer w2.Close()
 
@@ -386,7 +386,7 @@ func TestWAL_Truncate_Basic(t *testing.T) {
 	dir := t.TempDir()
 	symbol := "BTC/USDT"
 
-	w, err := NewWAL(symbol, dir)
+	w, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 
 	// Append 5 entries
@@ -409,7 +409,7 @@ func TestWAL_Truncate_Basic(t *testing.T) {
 	w.Close()
 
 	// Reopen and truncate to LSN 3
-	w2, err := NewWAL(symbol, dir)
+	w2, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 	defer w2.Close()
 
@@ -435,7 +435,7 @@ func TestWAL_Truncate_All(t *testing.T) {
 	dir := t.TempDir()
 	symbol := "BTC/USDT"
 
-	w, err := NewWAL(symbol, dir)
+	w, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 
 	// Append 3 entries
@@ -457,7 +457,7 @@ func TestWAL_Truncate_All(t *testing.T) {
 	w.Close()
 
 	// Reopen and truncate all
-	w2, err := NewWAL(symbol, dir)
+	w2, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 	defer w2.Close()
 
@@ -481,7 +481,7 @@ func TestWAL_Truncate_None(t *testing.T) {
 	dir := t.TempDir()
 	symbol := "BTC/USDT"
 
-	w, err := NewWAL(symbol, dir)
+	w, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 
 	// Append 3 entries
@@ -503,7 +503,7 @@ func TestWAL_Truncate_None(t *testing.T) {
 	w.Close()
 
 	// Reopen and truncate to LSN 0 (should truncate nothing)
-	w2, err := NewWAL(symbol, dir)
+	w2, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 	defer w2.Close()
 
@@ -518,7 +518,7 @@ func TestWAL_Truncate_PreservesNewerEntries(t *testing.T) {
 	dir := t.TempDir()
 	symbol := "BTC/USDT"
 
-	w, err := NewWAL(symbol, dir)
+	w, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 
 	// Append mixed entries
@@ -541,7 +541,7 @@ func TestWAL_Truncate_PreservesNewerEntries(t *testing.T) {
 	w.Close()
 
 	// Reopen and truncate to LSN 2
-	w2, err := NewWAL(symbol, dir)
+	w2, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 	defer w2.Close()
 
@@ -575,7 +575,7 @@ func TestWAL_Close(t *testing.T) {
 	dir := t.TempDir()
 	symbol := "BTC/USDT"
 
-	w, err := NewWAL(symbol, dir)
+	w, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 
 	// Append an entry
@@ -610,7 +610,7 @@ func TestWAL_Append_Closed(t *testing.T) {
 	dir := t.TempDir()
 	symbol := "BTC/USDT"
 
-	w, err := NewWAL(symbol, dir)
+	w, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 	w.Close()
 
@@ -656,7 +656,7 @@ func TestWAL_SnapshotLSN(t *testing.T) {
 	dir := t.TempDir()
 	symbol := "BTC/USDT"
 
-	w, err := NewWAL(symbol, dir)
+	w, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 
 	// Append 3 entries
@@ -687,7 +687,7 @@ func TestWAL_Sync(t *testing.T) {
 	dir := t.TempDir()
 	symbol := "BTC/USDT"
 
-	w, err := NewWAL(symbol, dir)
+	w, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 	defer w.Close()
 
@@ -714,7 +714,7 @@ func TestWAL_ConcurrentAppend(t *testing.T) {
 	dir := t.TempDir()
 	symbol := "BTC/USDT"
 
-	w, err := NewWAL(symbol, dir)
+	w, err := NewWAL(symbol, dir, SyncNone, 0, 0)
 	require.NoError(t, err)
 	defer w.Close()
 

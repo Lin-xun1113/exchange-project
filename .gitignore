@@ -129,3 +129,10 @@ coverage/
 bybit.md
 RESUME.md
 ROADMAP.md
+
+# ---------- Comet插件目录 ----------
+.agents/
+.code-review-graph/
+.comet/
+.superpowers/
+skills-lock.json

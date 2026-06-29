@@ -129,6 +129,13 @@ func Save(snap *Snapshot, dir string) error {
 		return fmt.Errorf("failed to encode snapshot: %w", err)
 	}
 
+	// Sync file content to disk before closing
+	if err := file.Sync(); err != nil {
+		file.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to sync snapshot file: %w", err)
+	}
+
 	if err := file.Close(); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("failed to close snapshot file: %w", err)
@@ -137,6 +144,23 @@ func Save(snap *Snapshot, dir string) error {
 	if err := os.Rename(tmpPath, finalPath); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("failed to rename snapshot file: %w", err)
+	}
+
+	// Sync parent directory to ensure rename is committed
+	parentDir := dir
+	if dirFile, err := os.Open(parentDir); err == nil {
+		if err := dirFile.Sync(); err != nil {
+			logger.Warn("failed to sync snapshot parent directory",
+				logger.S("symbol", snap.Symbol),
+				logger.Err(err),
+			)
+		}
+		dirFile.Close()
+	} else {
+		logger.Warn("failed to open snapshot parent directory for sync",
+			logger.S("symbol", snap.Symbol),
+			logger.Err(err),
+		)
 	}
 
 	// Update the .latest symlink.

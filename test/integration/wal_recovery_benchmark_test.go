@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/linxun2025/exchange-project/internal/matching/engine"
+	"github.com/linxun2025/exchange-project/internal/matching/wal"
 	"github.com/linxun2025/exchange-project/internal/model"
 	"github.com/shopspring/decimal"
 )
@@ -33,15 +34,16 @@ func benchmarkRecovery(b *testing.B, symbol string, orderCount int, withSnapshot
 
 	// 禁用自动快照，使用 ManualSnapshotInterval
 	cfg := engine.Config{
-		WALDir:      walDir,
-		SnapshotDir: snapshotDir,
+		WALDir:              walDir,
+		SnapshotDir:         snapshotDir,
 		MaxTradesPerSnapshot: 10000, // 禁用自动触发
+		WALSyncMode:         wal.SyncNone,
 	}
 
 	// Phase 1: 创建订单
 	{
 		m := engine.NewMatcher(cfg)
-		walManager := engine.NewWALManager(walDir)
+		walManager := engine.NewWALManager(walDir, wal.SyncNone, 0, 0)
 		m.SetWALManager(walManager)
 		m.SetSnapshotDir(snapshotDir)
 
@@ -75,9 +77,10 @@ func benchmarkRecovery(b *testing.B, symbol string, orderCount int, withSnapshot
 		cfg := engine.Config{
 			WALDir:      walDir,
 			SnapshotDir: snapshotDir,
+			WALSyncMode: wal.SyncNone,
 		}
 		m := engine.NewMatcher(cfg)
-		walManager := engine.NewWALManager(walDir)
+		walManager := engine.NewWALManager(walDir, wal.SyncNone, 0, 0)
 		m.SetWALManager(walManager)
 
 		start := time.Now()

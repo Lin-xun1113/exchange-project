@@ -27,6 +27,20 @@ const (
 	EntryTypeTrade
 )
 
+// SyncMode represents the fsync strategy for WAL durability.
+type SyncMode int
+
+const (
+	// SyncNone disables fsync - highest throughput, no durability guarantee
+	SyncNone SyncMode = iota
+	// SyncAlways calls fsync after every append - maximum durability, highest latency
+	SyncAlways
+	// SyncByCount calls fsync after N entries accumulate since last fsync
+	SyncByCount
+	// SyncByDuration calls fsync if D time has elapsed since last fsync (Group Commit)
+	SyncByDuration
+)
+
 func (t EntryType) String() string {
 	switch t {
 	case EntryTypeCommand:
@@ -91,6 +105,13 @@ type WAL struct {
 	writer *bufio.Writer
 	lsn    atomic.Uint64
 	closed atomic.Bool
+
+	// Sync configuration
+	syncMode     SyncMode
+	syncEvery    uint64
+	syncInterval time.Duration
+	pendingSyncs uint64
+	lastSyncTime time.Time
 }
 
 // SanitizeSymbol converts a symbol to a safe filename by replacing special characters.
@@ -102,7 +123,10 @@ func SanitizeSymbol(symbol string) string {
 }
 
 // NewWAL opens (or creates) the WAL file for a symbol and returns a WAL instance.
-func NewWAL(symbol, dir string) (*WAL, error) {
+// syncMode: fsync strategy (SyncNone, SyncAlways, SyncByCount, SyncByDuration)
+// syncEvery: threshold for SyncByCount mode (number of entries)
+// syncInterval: threshold for SyncByDuration mode (Group Commit window)
+func NewWAL(symbol, dir string, syncMode SyncMode, syncEvery uint64, syncInterval time.Duration) (*WAL, error) {
 	// Sanitize symbol for use as filename
 	safeSymbol := SanitizeSymbol(symbol)
 
@@ -117,11 +141,17 @@ func NewWAL(symbol, dir string) (*WAL, error) {
 		return nil, fmt.Errorf("failed to open WAL file %s: %w", path, err)
 	}
 
+	now := time.Now()
 	w := &WAL{
-		symbol: symbol,
-		path:   path,
-		file:   file,
-		writer: bufio.NewWriter(file),
+		symbol:        symbol,
+		path:          path,
+		file:          file,
+		writer:        bufio.NewWriter(file),
+		syncMode:      syncMode,
+		syncEvery:     syncEvery,
+		syncInterval:  syncInterval,
+		pendingSyncs:  0,
+		lastSyncTime:  now,
 	}
 
 	if err := w.readLastLSN(); err != nil {
@@ -133,9 +163,41 @@ func NewWAL(symbol, dir string) (*WAL, error) {
 		logger.S("symbol", symbol),
 		logger.S("path", path),
 		logger.I64("last_lsn", int64(w.lsn.Load())),
+		logger.S("sync_mode", syncMode.String()),
 	)
 
 	return w, nil
+}
+
+// String returns the string representation of SyncMode.
+func (m SyncMode) String() string {
+	switch m {
+	case SyncNone:
+		return "none"
+	case SyncAlways:
+		return "always"
+	case SyncByCount:
+		return "bycount"
+	case SyncByDuration:
+		return "byduration"
+	default:
+		return "unknown"
+	}
+}
+
+// shouldSync returns true if fsync should be called based on current sync mode.
+func (w *WAL) shouldSync() bool {
+	switch w.syncMode {
+	case SyncNone:
+		return false
+	case SyncAlways:
+		return true
+	case SyncByCount:
+		return w.pendingSyncs >= w.syncEvery
+	case SyncByDuration:
+		return time.Since(w.lastSyncTime) >= w.syncInterval
+	}
+	return false
 }
 
 // readLastLSN scans the file to find the last complete record's LSN.
@@ -191,7 +253,7 @@ func (w *WAL) Append(entry *Entry) (uint64, error) {
 
 	start := time.Now()
 	defer func() {
-		metrics.GetMetrics().RecordWALAppendLatency(time.Since(start))
+		metrics.GetMetrics().RecordWALAppendLatency(time.Since(start), w.syncMode.String())
 	}()
 
 	lsn := w.lsn.Add(1)
@@ -233,9 +295,30 @@ func (w *WAL) Append(entry *Entry) (uint64, error) {
 		return 0, fmt.Errorf("failed to write WAL record: %w", err)
 	}
 
-	// Flush on every write to ensure durability for truncation
+	// Flush to push data to OS page cache
 	if err := w.writer.Flush(); err != nil {
 		return lsn, fmt.Errorf("failed to flush WAL: %w", err)
+	}
+
+	// Increment pending counter
+	w.pendingSyncs++
+	metrics.GetMetrics().SetWALPendingEntries(int64(w.pendingSyncs))
+
+	// Sync to disk if sync condition is met
+	if w.shouldSync() {
+		syncStart := time.Now()
+		if err := w.file.Sync(); err != nil {
+			metrics.GetMetrics().RecordWALFsyncLatency(time.Since(syncStart), "failure")
+			logger.Error("WAL fsync failed",
+				logger.S("symbol", w.symbol),
+				logger.Err(err),
+			)
+		} else {
+			metrics.GetMetrics().RecordWALFsyncLatency(time.Since(syncStart), "success")
+			metrics.GetMetrics().RecordWALGroupSize(int64(w.pendingSyncs))
+			w.pendingSyncs = 0
+			w.lastSyncTime = time.Now()
+		}
 	}
 
 	logger.Debug("WAL append",
@@ -267,6 +350,19 @@ func (w *WAL) Close() error {
 				logger.S("symbol", w.symbol),
 				logger.Err(err),
 			)
+		}
+	}
+
+	// Final sync if there are pending entries
+	if w.pendingSyncs > 0 && w.syncMode != SyncNone {
+		if err := w.file.Sync(); err != nil {
+			logger.Error("failed to sync WAL on close",
+				logger.S("symbol", w.symbol),
+				logger.Err(err),
+			)
+		} else {
+			metrics.GetMetrics().RecordWALGroupSize(int64(w.pendingSyncs))
+			w.pendingSyncs = 0
 		}
 	}
 

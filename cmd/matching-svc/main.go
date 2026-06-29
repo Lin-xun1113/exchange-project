@@ -14,6 +14,7 @@ import (
 	"github.com/linxun2025/exchange-project/internal/matching/client"
 	"github.com/linxun2025/exchange-project/internal/matching/engine"
 	"github.com/linxun2025/exchange-project/internal/matching/server"
+	"github.com/linxun2025/exchange-project/internal/matching/wal"
 	"github.com/linxun2025/exchange-project/internal/order/repository"
 	"github.com/linxun2025/exchange-project/pkg/config"
 	"github.com/linxun2025/exchange-project/pkg/grpcx"
@@ -78,15 +79,23 @@ func main() {
 	maxTradesPerSnapshot := getEnvIntOrDefault("MAX_TRADES_PER_SNAPSHOT", 1000)
 	snapshotInterval := time.Duration(getEnvIntOrDefault("SNAPSHOT_INTERVAL_SECONDS", 60)) * time.Second
 
+	// WAL sync configuration
+	walSyncMode := parseWALSyncMode(getEnvOrDefault("WAL_SYNC_MODE", "byduration"))
+	walSyncInterval := time.Duration(getEnvIntOrDefault("WAL_SYNC_INTERVAL_MS", 1)) * time.Millisecond
+	walSyncEvery := uint64(getEnvIntOrDefault("WAL_SYNC_EVERY", 0))
+
 	logger.Info("WAL and snapshot config",
 		logger.S("wal_dir", walDir),
 		logger.S("snapshot_dir", snapshotDir),
 		logger.I("max_trades_per_snapshot", maxTradesPerSnapshot),
 		logger.S("snapshot_interval", snapshotInterval.String()),
+		logger.S("wal_sync_mode", walSyncMode.String()),
+		logger.S("wal_sync_interval", walSyncInterval.String()),
+		logger.I64("wal_sync_every", int64(walSyncEvery)),
 	)
 
 	// Create WAL manager.
-	walManager := engine.NewWALManager(walDir)
+	walManager := engine.NewWALManager(walDir, walSyncMode, walSyncEvery, walSyncInterval)
 	defer walManager.Close()
 
 	// Create matcher.
@@ -165,4 +174,19 @@ func getEnvIntOrDefault(key string, defaultVal int) int {
 		}
 	}
 	return defaultVal
+}
+
+func parseWALSyncMode(mode string) wal.SyncMode {
+	switch mode {
+	case "none":
+		return wal.SyncNone
+	case "always":
+		return wal.SyncAlways
+	case "bycount":
+		return wal.SyncByCount
+	case "byduration":
+		return wal.SyncByDuration
+	default:
+		return wal.SyncByDuration // Default to Group Commit
+	}
 }

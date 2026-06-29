@@ -74,8 +74,11 @@ type Metrics struct {
 
 	matchingMatchTotal *prometheus.CounterVec
 
-	// WAL metrics (placeholder for future WAL implementation)
+	// WAL metrics
 	matchingWALAppendSeconds *prometheus.HistogramVec
+	matchingWALFsyncSeconds *prometheus.HistogramVec
+	matchingWALPendingEntries prometheus.Gauge
+	matchingWALGroupSize *prometheus.HistogramVec
 
 	// Rate limiting metrics
 	rateLimitBlockedTotal   *prometheus.CounterVec
@@ -279,12 +282,34 @@ func newMetrics() *Metrics {
 			[]string{"side", "symbol"},
 		),
 
-		// WAL metrics (placeholder for future WAL implementation)
+		// WAL metrics
 		matchingWALAppendSeconds: promauto.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Name:    "matching_wal_append_seconds",
-				Help:    "WAL append latency in seconds (for future WAL implementation)",
+				Help:    "WAL append latency in seconds",
 				Buckets: []float64{.0001, .0005, .001, .005, .01, .025, .05, .1},
+			},
+			[]string{"sync_mode"},
+		),
+		matchingWALFsyncSeconds: promauto.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "matching_wal_fsync_seconds",
+				Help:    "WAL fsync latency in seconds",
+				Buckets: []float64{.00005, .0001, .0005, .001, .005, .01, .025, .05, .1},
+			},
+			[]string{"status"},
+		),
+		matchingWALPendingEntries: promauto.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "matching_wal_pending_entries",
+				Help: "Number of unflushed WAL entries pending sync",
+			},
+		),
+		matchingWALGroupSize: promauto.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "matching_wal_group_size",
+				Help:    "Number of entries batched per WAL fsync",
+				Buckets: []float64{1, 5, 10, 25, 50, 100, 250, 500, 1000},
 			},
 			[]string{},
 		),
@@ -475,8 +500,23 @@ func (m *Metrics) RecordMatchingMatch(side, symbol string, count float64) {
 }
 
 // RecordWALAppendLatency 记录 WAL 追加延迟
-func (m *Metrics) RecordWALAppendLatency(duration time.Duration) {
-	m.matchingWALAppendSeconds.WithLabelValues().Observe(duration.Seconds())
+func (m *Metrics) RecordWALAppendLatency(duration time.Duration, syncMode string) {
+	m.matchingWALAppendSeconds.WithLabelValues(syncMode).Observe(duration.Seconds())
+}
+
+// RecordWALFsyncLatency 记录 WAL fsync 延迟
+func (m *Metrics) RecordWALFsyncLatency(duration time.Duration, status string) {
+	m.matchingWALFsyncSeconds.WithLabelValues(status).Observe(duration.Seconds())
+}
+
+// SetWALPendingEntries 设置待同步 WAL 条目数
+func (m *Metrics) SetWALPendingEntries(count int64) {
+	m.matchingWALPendingEntries.Set(float64(count))
+}
+
+// RecordWALGroupSize 记录 Group Commit 批次大小
+func (m *Metrics) RecordWALGroupSize(size int64) {
+	m.matchingWALGroupSize.WithLabelValues().Observe(float64(size))
 }
 
 // RecordRateLimitBlocked 记录限流拦截
