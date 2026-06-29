@@ -2,7 +2,7 @@
 
 覆盖交易系统全链路的 Prometheus 指标暴露能力。
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Order Lifecycle Metrics
 The system SHALL expose order lifecycle metrics for monitoring order flow and fill rates.

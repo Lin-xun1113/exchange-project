@@ -129,6 +129,9 @@ coverage/
 bybit.md
 RESUME.md
 ROADMAP.md
+docs/interviews/
+
+
 
 # ---------- Comet插件目录 ----------
 .agents/
