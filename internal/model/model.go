@@ -28,26 +28,41 @@ type Balance struct {
 	UpdatedAt time.Time
 }
 
-// Order 订单模型
-type Order struct {
-	ID              int64     `gorm:"primaryKey;autoIncrement" json:"id"`
-	OrderID        string    `gorm:"type:varchar(64);uniqueIndex;not null" json:"order_id"`
-	IdempotencyKey string    `gorm:"type:varchar(128);uniqueIndex" json:"idempotency_key,omitempty"`
-	UserID         int64     `gorm:"index;not null" json:"user_id"`
-	Symbol         string    `gorm:"type:varchar(32);not null;index" json:"symbol"`
-	Side           string    `gorm:"type:enum('buy','sell');not null" json:"side"`
-	OrderType      string    `gorm:"type:enum('limit','market','ioc','fok');default:'limit';not null" json:"order_type"`
-	Price          float64   `gorm:"type:decimal(20,8);not null" json:"price"`
-	Quantity       float64   `gorm:"type:decimal(20,8);not null" json:"quantity"`
-	FilledQuantity float64   `gorm:"type:decimal(20,8);default:0;not null" json:"filled_quantity"`
-	Status         string    `gorm:"type:enum('created','frozen','pending','partial_filled','filled','cancelled','rejected','submitted','settled');default:'created';not null;index" json:"status"`
-	CreatedAt      time.Time `gorm:"autoCreateTime;index" json:"created_at"`
-	UpdatedAt      time.Time `gorm:"autoUpdateTime" json:"updated_at"`
-	User           *User     `gorm:"foreignKey:UserID" json:"user,omitempty"`
+func (Balance) TableName() string { return "balances" }
+
+type LedgerEntry struct {
+	ID             int64  `gorm:"primaryKey;autoIncrement"`
+	RefType        string `gorm:"type:varchar(16)"`
+	RefID          string `gorm:"type:varchar(96)"`
+	Leg            int    `gorm:"type:tinyint"`
+	UserID         int64
+	Asset          string          `gorm:"type:varchar(16)"`
+	DeltaAvailable decimal.Decimal `gorm:"type:decimal(36,18)"`
+	DeltaFrozen    decimal.Decimal `gorm:"type:decimal(36,18)"`
+	CreatedAt      time.Time
 }
 
-func (Order) TableName() string {
-	return "orders"
+func (LedgerEntry) TableName() string { return "ledger_entries" }
+
+type Order struct {
+	ID              int64  `gorm:"primaryKey;autoIncrement"`
+	OrderID         string `gorm:"type:varchar(64)"`
+	UserID          int64
+	IdempotencyKey  string          `gorm:"type:varchar(64)"`
+	Symbol          string          `gorm:"type:varchar(32)"`
+	Side            OrderSide       `gorm:"type:enum('buy','sell')"`
+	Type            OrderType       `gorm:"column:type;type:enum('limit','market','ioc','fok')"`
+	Price           decimal.Decimal `gorm:"type:decimal(36,18)"`
+	Quantity        decimal.Decimal `gorm:"type:decimal(36,18)"`
+	FilledQuantity  decimal.Decimal `gorm:"type:decimal(36,18)"`
+	ClosedQuantity  decimal.Decimal `gorm:"type:decimal(36,18)"`
+	FrozenAsset     string          `gorm:"type:varchar(16)"`
+	FrozenAmount    decimal.Decimal `gorm:"type:decimal(36,18)"`
+	Status          OrderStatus     `gorm:"type:enum('pending','open','partial_filled','filled','cancelled','rejected');default:pending"`
+	RejectReason    string          `gorm:"type:varchar(32)"`
+	CancelRequested bool
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 func (Order) TableName() string { return "orders" }
@@ -85,16 +100,18 @@ func (s OrderStatus) IsFinal() bool {
 }
 
 type Trade struct {
-	ID          int64     `gorm:"primaryKey;autoIncrement" json:"id"`
-	TradeID     string    `gorm:"type:varchar(64);uniqueIndex;not null" json:"trade_id"`
-	BuyOrderID  string    `gorm:"type:varchar(64);index;not null" json:"buy_order_id"`
-	SellOrderID string    `gorm:"type:varchar(64);index;not null" json:"sell_order_id"`
-	Symbol      string    `gorm:"type:varchar(32);not null" json:"symbol"`
-	Price       float64   `gorm:"type:decimal(20,8);not null" json:"price"`
-	Quantity    float64   `gorm:"type:decimal(20,8);not null" json:"quantity"`
-	BuyUserID   int64     `gorm:"not null" json:"buy_user_id"`
-	SellUserID  int64     `gorm:"not null" json:"sell_user_id"`
-	CreatedAt   time.Time `gorm:"autoCreateTime" json:"created_at"`
+	ID          int64  `gorm:"primaryKey;autoIncrement"`
+	TradeID     string `gorm:"type:varchar(96)"`
+	Symbol      string `gorm:"type:varchar(32)"`
+	BuyOrderID  string `gorm:"type:varchar(64)"`
+	SellOrderID string `gorm:"type:varchar(64)"`
+	BuyUserID   int64
+	SellUserID  int64
+	Price       decimal.Decimal `gorm:"type:decimal(36,18)"`
+	Quantity    decimal.Decimal `gorm:"type:decimal(36,18)"`
+	TakerSide   OrderSide       `gorm:"type:enum('buy','sell')"`
+	LSN         uint64
+	CreatedAt   time.Time
 }
 
 func (Trade) TableName() string { return "trades" }

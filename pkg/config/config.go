@@ -11,20 +11,23 @@ import (
 	"time"
 
 	"github.com/linxun2025/exchange-project/pkg/logger"
+	"github.com/linxun2025/exchange-project/pkg/symbol"
 	"go.uber.org/zap"
 )
 
 // Config 全局配置
 type Config struct {
-	App        AppConfig        `yaml:"app"`
-	Server     ServerConfig     `yaml:"server"`
-	Database   DatabaseConfig   `yaml:"database"`
-	Redis      RedisConfig      `yaml:"redis"`
-	JWT        JWTConfig        `yaml:"jwt"`
-	Logging    LoggingConfig    `yaml:"logging"`
-	Service    ServiceConfig    `yaml:"service"`
-	GRPC       GRPCConfig       `yaml:"grpc"`
-	RateLimit  RateLimitConfig  `yaml:"rate_limit"`
+	App       AppConfig       `yaml:"app"`
+	Server    ServerConfig    `yaml:"server"`
+	Database  DatabaseConfig  `yaml:"database"`
+	Redis     RedisConfig     `yaml:"redis"`
+	JWT       JWTConfig       `yaml:"jwt"`
+	Logging   LoggingConfig   `yaml:"logging"`
+	Service   ServiceConfig   `yaml:"service"`
+	GRPC      GRPCConfig      `yaml:"grpc"`
+	RateLimit RateLimitConfig `yaml:"rate_limit"`
+	Symbols   []string        `yaml:"symbols"`
+	Metrics   MetricsConfig   `yaml:"metrics"`
 }
 
 // MetricsConfig configures the service's metrics HTTP listener.
@@ -119,17 +122,17 @@ type ServiceConfig struct {
 
 // RateLimitConfig 限流配置
 type RateLimitConfig struct {
-	Enabled  bool             `yaml:"enabled"`
+	Enabled  bool              `yaml:"enabled"`
 	Policies []RateLimitPolicy `yaml:"policies"`
 }
 
 // RateLimitPolicy 限流策略
 type RateLimitPolicy struct {
-	Name       string   `yaml:"name"`
-	Scope      string   `yaml:"scope"`       // ip, user, api
-	Limit      string   `yaml:"limit"`       // e.g., "100/m", "10/s"
-	WindowSec  int64    `yaml:"-"`           // 解析后的窗口秒数
-	MaxCount   int64    `yaml:"-"`           // 解析后的最大请求数
+	Name      string `yaml:"name"`
+	Scope     string `yaml:"scope"` // ip, user, api
+	Limit     string `yaml:"limit"` // e.g., "100/m", "10/s"
+	WindowSec int64  `yaml:"-"`     // 解析后的窗口秒数
+	MaxCount  int64  `yaml:"-"`     // 解析后的最大请求数
 }
 
 // ParseLimit 解析限流限制字符串，如 "100/m" -> maxCount=100, windowSec=60
