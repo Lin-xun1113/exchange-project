@@ -27,6 +27,11 @@ type Config struct {
 	RateLimit  RateLimitConfig  `yaml:"rate_limit"`
 }
 
+// MetricsConfig configures the service's metrics HTTP listener.
+type MetricsConfig struct {
+	Addr string `yaml:"addr"`
+}
+
 // GRPCConfig gRPC 服务配置
 type GRPCConfig struct {
 	UserGRPCAddr     string `yaml:"user_grpc_addr"`
@@ -123,54 +128,48 @@ type RateLimitPolicy struct {
 	Name       string   `yaml:"name"`
 	Scope      string   `yaml:"scope"`       // ip, user, api
 	Limit      string   `yaml:"limit"`       // e.g., "100/m", "10/s"
-	Paths      []string `yaml:"paths"`       // 限流路径列表，空表示全部路径
 	WindowSec  int64    `yaml:"-"`           // 解析后的窗口秒数
 	MaxCount   int64    `yaml:"-"`           // 解析后的最大请求数
 }
 
 // ParseLimit 解析限流限制字符串，如 "100/m" -> maxCount=100, windowSec=60
 func (p *RateLimitPolicy) ParseLimit() error {
-	parts := strings.Split(p.Limit, "/")
-	if len(parts) != 2 {
+	count, unit, ok := strings.Cut(p.Limit, "/")
+	if !ok {
 		return fmt.Errorf("invalid limit format: %s, expected format: '100/m'", p.Limit)
 	}
-
-	maxCount, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil {
-		return fmt.Errorf("invalid limit count: %s", parts[0])
+	maxCount, err := strconv.ParseInt(count, 10, 64)
+	if err != nil || maxCount <= 0 {
+		return fmt.Errorf("invalid limit count: %s", count)
+	}
+	var windowSec int64
+	switch unit {
+	case "s":
+		windowSec = 1
+	case "m":
+		windowSec = 60
+	case "h":
+		windowSec = 3600
+	default:
+		return fmt.Errorf("invalid time unit: %s, expected s/m/h", unit)
 	}
 	p.MaxCount = maxCount
-
-	switch parts[1] {
-	case "s":
-		p.WindowSec = 1
-	case "m":
-		p.WindowSec = 60
-	case "h":
-		p.WindowSec = 3600
-	default:
-		return fmt.Errorf("invalid time unit: %s, expected s/m/h", parts[1])
-	}
-
+	p.WindowSec = windowSec
 	return nil
 }
 
-// MatchPath 检查路径是否匹配策略
-func (p *RateLimitPolicy) MatchPath(path string) bool {
-	if len(p.Paths) == 0 {
-		return true
-	}
-	for _, p := range p.Paths {
-		if p == path {
-			return true
+// Policy returns the configured rate limit policy with the given name.
+func (c *RateLimitConfig) Policy(name string) (RateLimitPolicy, bool) {
+	for _, policy := range c.Policies {
+		if policy.Name == name {
+			return policy, true
 		}
 	}
-	return false
+	return RateLimitPolicy{}, false
 }
 
 // Load 加载配置
-func Load(configPath string) (*Config, error) {
-	// 优先从环境变量覆盖
+func Load() (*Config, error) {
 	cfg := &Config{}
 
 	// 读取环境变量并覆盖
@@ -179,7 +178,7 @@ func Load(configPath string) (*Config, error) {
 	cfg.App.Version = getEnv("APP_VERSION", "v1.0.0")
 
 	cfg.Database.Host = getEnv("DB_HOST", "localhost")
-	cfg.Database.Port = getEnvInt("DB_PORT", 3308)
+	cfg.Database.Port = getEnvInt("DB_PORT", 3306)
 	cfg.Database.Username = getEnv("DB_USERNAME", "root")
 	cfg.Database.Password = getEnv("DB_PASSWORD", "password")
 	cfg.Database.Database = getEnv("DB_DATABASE", "exchange")
@@ -220,16 +219,26 @@ func Load(configPath string) (*Config, error) {
 	cfg.GRPC.OrderGRPCAddr = getEnv("ORDER_GRPC_ADDR", "localhost:50052")
 	cfg.GRPC.MatchingGRPCAddr = getEnv("MATCHING_GRPC_ADDR", "localhost:50053")
 
+	for _, raw := range strings.Split(getEnv("SYMBOLS", "BTC/USDT,ETH/USDT"), ",") {
+		pair, err := symbol.Parse(strings.TrimSpace(raw))
+		if err != nil {
+			return nil, fmt.Errorf("SYMBOLS: %w", err)
+		}
+		cfg.Symbols = append(cfg.Symbols, pair.String())
+	}
+	cfg.Metrics.Addr = getEnv("METRICS_ADDR", ":9100")
+
 	// 限流配置
 	cfg.RateLimit.Enabled = getEnv("RATE_LIMIT_ENABLED", "true") == "true"
 
+	cfg.RateLimit.Policies = []RateLimitPolicy{
+		{Name: "ip_global", Scope: "ip", Limit: "100/s"},
+		{Name: "order_write", Scope: "user", Limit: "10/s"},
+	}
 	// 解析限流策略
 	for i := range cfg.RateLimit.Policies {
 		if err := cfg.RateLimit.Policies[i].ParseLimit(); err != nil {
-			logger.Warn("failed to parse rate limit policy",
-				logger.S("policy", cfg.RateLimit.Policies[i].Name),
-				logger.Err(err),
-			)
+			return nil, fmt.Errorf("rate limit policy %s: %w", cfg.RateLimit.Policies[i].Name, err)
 		}
 	}
 
@@ -241,57 +250,6 @@ func Load(configPath string) (*Config, error) {
 	)
 
 	return cfg, nil
-}
-
-// LoadDefault 加载默认配置（用于测试）
-func LoadDefault() *Config {
-	return &Config{
-		App: AppConfig{
-			Name:        "exchange-project",
-			Environment: "development",
-			Version:     "v1.0.0",
-		},
-		Server: ServerConfig{
-			Host: "0.0.0.0",
-			Port: 8080,
-		},
-		Database: DatabaseConfig{
-			Host:         "localhost",
-			Port:         3308,
-			Username:     "root",
-			Password:     "password",
-			Database:     "exchange",
-			MaxOpenConns: 100,
-			MaxIdleConns: 10,
-			ConnMaxLife:  60,
-		},
-		Redis: RedisConfig{
-			Host:     "localhost",
-			Port:     6379,
-			Password: "",
-			DB:       0,
-			PoolSize: 100,
-		},
-		JWT: JWTConfig{
-			Secret:     "dev-secret-key",
-			ExpireTime: 24,
-		},
-		Logging: LoggingConfig{
-			Level:      "info",
-			Directory:  "./logs",
-			MaxSize:    100,
-			MaxBackups: 7,
-			MaxAge:     30,
-		},
-		RateLimit: RateLimitConfig{
-			Enabled: true,
-			Policies: []RateLimitPolicy{
-				{Name: "global_ip", Scope: "ip", Limit: "100/m", Paths: nil},
-				{Name: "create_order_per_user", Scope: "user", Limit: "10/s", Paths: []string{"/api/v1/orders"}},
-				{Name: "login_per_ip", Scope: "ip", Limit: "5/m", Paths: []string{"/api/v1/auth/login"}},
-			},
-		},
-	}
 }
 
 // 辅助函数

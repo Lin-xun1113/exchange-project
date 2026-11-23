@@ -1,101 +1,55 @@
-# Stage 1: Builder
-FROM golang:1.21-alpine AS builder
+FROM golang:1.25-alpine AS builder
+WORKDIR /src
 
-# 安装必要工具
-RUN apk add --no-cache git make protoc
+RUN CGO_ENABLED=0 go install github.com/grpc-ecosystem/grpc-health-probe@v0.4.37
 
-# 设置工作目录
-WORKDIR /app
-
-# 复制 go mod 文件
-COPY go.mod go.sum* ./
-
-# 下载依赖
+COPY go.mod go.sum ./
 RUN go mod download
 
-# 复制源代码
 COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/ \
+    ./cmd/gateway ./cmd/user-svc ./cmd/order-svc ./cmd/matching-svc
 
-# 编译 API Gateway
-RUN CGO_ENABLED=0 GOOS=linux go build -o /gateway ./cmd/gateway
-
-# 编译 User Service
-RUN CGO_ENABLED=0 GOOS=linux go build -o /user-svc ./cmd/user-svc
-
-# 编译 Order Service
-RUN CGO_ENABLED=0 GOOS=linux go build -o /order-svc ./cmd/order-svc
-
-# 编译 Matching Service
-RUN CGO_ENABLED=0 GOOS=linux go build -o /matching-svc ./cmd/matching-svc
-
-# ============= API Gateway =============
-FROM alpine:3.19 AS gateway
-
+FROM alpine:3.20 AS runtime
+RUN apk add --no-cache ca-certificates tzdata \
+    && addgroup -S -g 10001 app \
+    && adduser -S -D -H -u 10001 -G app app
 WORKDIR /app
+EXPOSE 9100
 
-# 安装 CA 证书
-RUN apk add --no-cache ca-certificates tzdata
-
-# 复制二进制文件
-COPY --from=builder /gateway .
-
-# 复制配置文件
-COPY pkg/errors ./pkg/errors
-
-# 暴露端口
+FROM runtime AS gateway
+COPY --from=builder /out/gateway /usr/local/bin/gateway
+USER app
 EXPOSE 8080
+HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=5 \
+    CMD ["wget", "-q", "-T", "2", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+CMD ["gateway"]
 
-# 健康检查
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/healthz || exit 1
+FROM runtime AS grpc-runtime
+COPY --from=builder /go/bin/grpc-health-probe /usr/local/bin/grpc_health_probe
 
-# 启动命令
-CMD ["./gateway"]
-
-# ============= User Service =============
-FROM alpine:3.19 AS user-svc
-
-WORKDIR /app
-
-RUN apk add --no-cache ca-certificates tzdata
-
-COPY --from=builder /user-svc .
-
+FROM grpc-runtime AS user-svc
+COPY --from=builder /out/user-svc /usr/local/bin/user-svc
+USER app
 EXPOSE 50051
+HEALTHCHECK --interval=5s --timeout=5s --start-period=5s --retries=5 \
+    CMD ["grpc_health_probe", "-addr=127.0.0.1:50051"]
+CMD ["user-svc"]
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD nc -z localhost 50051 || exit 1
-
-CMD ["./user-svc"]
-
-# ============= Order Service =============
-FROM alpine:3.19 AS order-svc
-
-WORKDIR /app
-
-RUN apk add --no-cache ca-certificates tzdata
-
-COPY --from=builder /order-svc .
-
+FROM grpc-runtime AS order-svc
+COPY --from=builder /out/order-svc /usr/local/bin/order-svc
+USER app
 EXPOSE 50052
+HEALTHCHECK --interval=5s --timeout=5s --start-period=5s --retries=5 \
+    CMD ["grpc_health_probe", "-addr=127.0.0.1:50052"]
+CMD ["order-svc"]
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD nc -z localhost 50052 || exit 1
-
-CMD ["./order-svc"]
-
-# ============= Matching Service =============
-FROM alpine:3.19 AS matching-svc
-
-WORKDIR /app
-
-RUN apk add --no-cache ca-certificates tzdata
-
-COPY --from=builder /matching-svc .
-
+FROM grpc-runtime AS matching-svc
+COPY --from=builder /out/matching-svc /usr/local/bin/matching-svc
+RUN mkdir -p /data/wal /data/snapshot && chown -R app:app /data
+VOLUME ["/data"]
+USER app
 EXPOSE 50053
-
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD nc -z localhost 50053 || exit 1
-
-CMD ["./matching-svc"]
+HEALTHCHECK --interval=5s --timeout=5s --start-period=10s --retries=5 \
+    CMD ["grpc_health_probe", "-addr=127.0.0.1:50053"]
+CMD ["matching-svc"]
