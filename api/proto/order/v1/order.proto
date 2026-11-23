@@ -12,6 +12,9 @@ service OrderService {
   rpc GetOrder(GetOrderRequest) returns (GetOrderResponse);
   rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse);
   rpc ListTrades(ListTradesRequest) returns (ListTradesResponse);
+  rpc ListMarketTrades(ListMarketTradesRequest) returns (ListMarketTradesResponse);
+  rpc ListCandles(ListCandlesRequest) returns (ListCandlesResponse);
+  rpc ListTickers(ListTickersRequest) returns (ListTickersResponse);
 }
 
 enum OrderSide {
@@ -128,3 +131,39 @@ message ListTradesResponse {
   repeated Trade trades = 1;
   string next_page_token = 2;
 }
+
+// 公开成交，不含用户信息。
+message MarketTrade {
+  string trade_id = 1;
+  string price = 2;
+  string quantity = 3;
+  OrderSide taker_side = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+message ListMarketTradesRequest { string symbol = 1; int32 limit = 2; } // 默认 50，最大 200
+message ListMarketTradesResponse { repeated MarketTrade trades = 1; }
+
+message Candle {
+  int64 open_time = 1; // Unix 秒，桶起点
+  string open = 2;
+  string high = 3;
+  string low = 4;
+  string close = 5;
+  string volume = 6;
+}
+message ListCandlesRequest { string symbol = 1; int32 interval_seconds = 2; int32 limit = 3; } // limit 默认 300，最大 1000
+message ListCandlesResponse { repeated Candle candles = 1; }
+
+message Ticker {
+  string symbol = 1;
+  string last_price = 2;
+  string open_24h = 3;
+  string high_24h = 4;
+  string low_24h = 5;
+  string volume_24h = 6;
+  string quote_volume_24h = 7;
+  string change_percent_24h = 8;
+  int64 trade_count_24h = 9;
+}
+message ListTickersRequest { repeated string symbols = 1; }
+message ListTickersResponse { repeated Ticker tickers = 1; }

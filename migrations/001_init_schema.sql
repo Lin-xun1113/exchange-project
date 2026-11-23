@@ -84,7 +84,8 @@ CREATE TABLE IF NOT EXISTS `trades` (
     KEY `idx_buy_order` (`buy_order_id`),
     KEY `idx_sell_order` (`sell_order_id`),
     KEY `idx_buy_user` (`buy_user_id`, `id`),
-    KEY `idx_sell_user` (`sell_user_id`, `id`)
+    KEY `idx_sell_user` (`sell_user_id`, `id`),
+    KEY `idx_symbol_time` (`symbol`, `created_at`, `id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `outbox` (

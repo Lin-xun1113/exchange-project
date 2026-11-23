@@ -19,11 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	OrderService_CreateOrder_FullMethodName = "/order.v1.OrderService/CreateOrder"
-	OrderService_CancelOrder_FullMethodName = "/order.v1.OrderService/CancelOrder"
-	OrderService_GetOrder_FullMethodName    = "/order.v1.OrderService/GetOrder"
-	OrderService_ListOrders_FullMethodName  = "/order.v1.OrderService/ListOrders"
-	OrderService_ListTrades_FullMethodName  = "/order.v1.OrderService/ListTrades"
+	OrderService_CreateOrder_FullMethodName      = "/order.v1.OrderService/CreateOrder"
+	OrderService_CancelOrder_FullMethodName      = "/order.v1.OrderService/CancelOrder"
+	OrderService_GetOrder_FullMethodName         = "/order.v1.OrderService/GetOrder"
+	OrderService_ListOrders_FullMethodName       = "/order.v1.OrderService/ListOrders"
+	OrderService_ListTrades_FullMethodName       = "/order.v1.OrderService/ListTrades"
+	OrderService_ListMarketTrades_FullMethodName = "/order.v1.OrderService/ListMarketTrades"
+	OrderService_ListCandles_FullMethodName      = "/order.v1.OrderService/ListCandles"
+	OrderService_ListTickers_FullMethodName      = "/order.v1.OrderService/ListTickers"
 )
 
 // OrderServiceClient is the client API for OrderService service.
@@ -35,6 +38,9 @@ type OrderServiceClient interface {
 	GetOrder(ctx context.Context, in *GetOrderRequest, opts ...grpc.CallOption) (*GetOrderResponse, error)
 	ListOrders(ctx context.Context, in *ListOrdersRequest, opts ...grpc.CallOption) (*ListOrdersResponse, error)
 	ListTrades(ctx context.Context, in *ListTradesRequest, opts ...grpc.CallOption) (*ListTradesResponse, error)
+	ListMarketTrades(ctx context.Context, in *ListMarketTradesRequest, opts ...grpc.CallOption) (*ListMarketTradesResponse, error)
+	ListCandles(ctx context.Context, in *ListCandlesRequest, opts ...grpc.CallOption) (*ListCandlesResponse, error)
+	ListTickers(ctx context.Context, in *ListTickersRequest, opts ...grpc.CallOption) (*ListTickersResponse, error)
 }
 
 type orderServiceClient struct {
@@ -95,6 +101,36 @@ func (c *orderServiceClient) ListTrades(ctx context.Context, in *ListTradesReque
 	return out, nil
 }
 
+func (c *orderServiceClient) ListMarketTrades(ctx context.Context, in *ListMarketTradesRequest, opts ...grpc.CallOption) (*ListMarketTradesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListMarketTradesResponse)
+	err := c.cc.Invoke(ctx, OrderService_ListMarketTrades_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *orderServiceClient) ListCandles(ctx context.Context, in *ListCandlesRequest, opts ...grpc.CallOption) (*ListCandlesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListCandlesResponse)
+	err := c.cc.Invoke(ctx, OrderService_ListCandles_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *orderServiceClient) ListTickers(ctx context.Context, in *ListTickersRequest, opts ...grpc.CallOption) (*ListTickersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTickersResponse)
+	err := c.cc.Invoke(ctx, OrderService_ListTickers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // OrderServiceServer is the server API for OrderService service.
 // All implementations must embed UnimplementedOrderServiceServer
 // for forward compatibility.
@@ -104,6 +140,9 @@ type OrderServiceServer interface {
 	GetOrder(context.Context, *GetOrderRequest) (*GetOrderResponse, error)
 	ListOrders(context.Context, *ListOrdersRequest) (*ListOrdersResponse, error)
 	ListTrades(context.Context, *ListTradesRequest) (*ListTradesResponse, error)
+	ListMarketTrades(context.Context, *ListMarketTradesRequest) (*ListMarketTradesResponse, error)
+	ListCandles(context.Context, *ListCandlesRequest) (*ListCandlesResponse, error)
+	ListTickers(context.Context, *ListTickersRequest) (*ListTickersResponse, error)
 	mustEmbedUnimplementedOrderServiceServer()
 }
 
@@ -128,6 +167,15 @@ func (UnimplementedOrderServiceServer) ListOrders(context.Context, *ListOrdersRe
 }
 func (UnimplementedOrderServiceServer) ListTrades(context.Context, *ListTradesRequest) (*ListTradesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListTrades not implemented")
+}
+func (UnimplementedOrderServiceServer) ListMarketTrades(context.Context, *ListMarketTradesRequest) (*ListMarketTradesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListMarketTrades not implemented")
+}
+func (UnimplementedOrderServiceServer) ListCandles(context.Context, *ListCandlesRequest) (*ListCandlesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListCandles not implemented")
+}
+func (UnimplementedOrderServiceServer) ListTickers(context.Context, *ListTickersRequest) (*ListTickersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListTickers not implemented")
 }
 func (UnimplementedOrderServiceServer) mustEmbedUnimplementedOrderServiceServer() {}
 func (UnimplementedOrderServiceServer) testEmbeddedByValue()                      {}
@@ -240,6 +288,60 @@ func _OrderService_ListTrades_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _OrderService_ListMarketTrades_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListMarketTradesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OrderServiceServer).ListMarketTrades(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OrderService_ListMarketTrades_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OrderServiceServer).ListMarketTrades(ctx, req.(*ListMarketTradesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _OrderService_ListCandles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListCandlesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OrderServiceServer).ListCandles(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OrderService_ListCandles_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OrderServiceServer).ListCandles(ctx, req.(*ListCandlesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _OrderService_ListTickers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTickersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OrderServiceServer).ListTickers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OrderService_ListTickers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OrderServiceServer).ListTickers(ctx, req.(*ListTickersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // OrderService_ServiceDesc is the grpc.ServiceDesc for OrderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -266,6 +368,18 @@ var OrderService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListTrades",
 			Handler:    _OrderService_ListTrades_Handler,
+		},
+		{
+			MethodName: "ListMarketTrades",
+			Handler:    _OrderService_ListMarketTrades_Handler,
+		},
+		{
+			MethodName: "ListCandles",
+			Handler:    _OrderService_ListCandles_Handler,
+		},
+		{
+			MethodName: "ListTickers",
+			Handler:    _OrderService_ListTickers_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
