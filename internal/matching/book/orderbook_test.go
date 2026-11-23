@@ -1,488 +1,158 @@
-// Package book_test 提供撮合引擎测试
 package book_test
 
 import (
-	"fmt"
+	"math"
 	"testing"
 
 	"github.com/linxun2025/exchange-project/internal/matching/book"
-	"github.com/linxun2025/exchange-project/internal/model"
-	"github.com/shopspring/decimal"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// TestOrderBook_AddOrder_Basic 测试订单簿基本添加
-func TestOrderBook_AddOrder_Basic(t *testing.T) {
-	ob := book.NewOrderBook("BTC/USDT")
-
-	// 添加一个买单
-	buyOrder := book.NewOrderInBook(1, "ORD001", 1, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(1.0))
-
-	trades, err := ob.AddOrder(buyOrder)
-
-	// 没有卖单，不应该成交
-	assert.NoError(t, err)
-	assert.Empty(t, trades)
-
-	// 买单应该加入订单簿
-	bids, asks := ob.GetDepth(10)
-	assert.Len(t, bids, 1)
-	assert.Len(t, asks, 0)
+func order(id string, user int64, side book.Side, kind book.Kind, price, qty int64) book.Order {
+	return book.Order{ID: id, UserID: user, Side: side, Kind: kind, Price: price, Qty: qty}
 }
 
-// TestOrderBook_AddOrder_Match 测试订单撮合
-func TestOrderBook_AddOrder_Match(t *testing.T) {
-	ob := book.NewOrderBook("BTC/USDT")
+func TestBook_PriceTimePriority(t *testing.T) {
+	b := book.New()
+	// The adjacent prices above 2^53 cannot be distinguished as float64.
+	const price = 1<<53 + 3
+	b.Submit(order("worse", 1, book.Sell, book.Limit, price+1, 4))
+	b.Submit(order("S1", 2, book.Sell, book.Limit, price, 2))
+	b.Submit(order("S2", 3, book.Sell, book.Limit, price, 3))
 
-	// 添加一个卖单
-	sellOrder := book.NewOrderInBook(1, "ORD001", 1, "BTC/USDT",
-		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(1.0))
-	_, _ = ob.AddOrder(sellOrder)
-
-	// 添加一个买单价高于卖单的买单
-	buyOrder := book.NewOrderInBook(2, "ORD002", 2, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(50100), decimal.NewFromFloat(0.5))
-	trades, err := ob.AddOrder(buyOrder)
-
-	// 应该成交
-	assert.NoError(t, err)
-	assert.Len(t, trades, 1)
-	assert.True(t, trades[0].Quantity.Equal(decimal.NewFromFloat(0.5)))
-	assert.Equal(t, "ORD002", trades[0].BuyOrderID)
-	assert.Equal(t, "ORD001", trades[0].SellOrderID)
+	r := b.Submit(order("buy", 2, book.Buy, book.Limit, price, 2))
+	require.Equal(t, book.Result{
+		Filled: 2,
+		Fills:  []book.Fill{{MakerID: "S1", MakerUserID: 2, Price: price, Qty: 2}},
+	}, r)
+	require.False(t, b.Has("S1"))
+	require.Equal(t, []book.Resting{
+		{ID: "S2", UserID: 3, Side: book.Sell, Price: price, Remaining: 3},
+		{ID: "worse", UserID: 1, Side: book.Sell, Price: price + 1, Remaining: 4},
+	}, b.Resting())
 }
 
-// TestOrderBook_AddOrder_PartialFill 测试部分成交
-func TestOrderBook_AddOrder_PartialFill(t *testing.T) {
-	ob := book.NewOrderBook("BTC/USDT")
+func TestBook_FOKFailurePreservesEntireBook(t *testing.T) {
+	b := book.New()
+	b.Submit(order("maker", 1, book.Sell, book.Limit, 20, 1))
+	b.Submit(order("too-far", 1, book.Sell, book.Limit, 21, 10))
+	before := b.Resting()
 
-	// 添加一个卖单
-	sellOrder := book.NewOrderInBook(1, "ORD001", 1, "BTC/USDT",
-		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(1.0))
-	_, _ = ob.AddOrder(sellOrder)
-
-	// 添加一个大于卖单量的买单
-	buyOrder := book.NewOrderInBook(2, "ORD002", 2, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(50100), decimal.NewFromFloat(1.5))
-	trades, err := ob.AddOrder(buyOrder)
-
-	// 卖单应该完全成交
-	assert.NoError(t, err)
-	assert.Len(t, trades, 1)
-	assert.True(t, trades[0].Quantity.Equal(decimal.NewFromFloat(1.0)))
-
-	// 买单应该还剩 0.5 (需要通过结果验证)
-	assert.True(t, buyOrder.RemainingQty.Equal(decimal.NewFromFloat(0.5)))
+	r := b.Submit(order("fok", 2, book.Buy, book.FOK, 20, 2))
+	require.Equal(t, book.Result{Remaining: 2, Reject: book.RejectFOKUnfilled}, r)
+	require.Equal(t, before, b.Resting())
 }
 
-// TestOrderBook_CancelOrder 测试取消订单
-func TestOrderBook_CancelOrder(t *testing.T) {
-	ob := book.NewOrderBook("BTC/USDT")
+func TestBook_FOKAcrossLevelsUsesMakerPrices(t *testing.T) {
+	b := book.New()
+	b.Submit(order("bid-1", 1, book.Buy, book.Limit, 22, 2))
+	b.Submit(order("bid-2", 2, book.Buy, book.Limit, 21, 3))
+	b.Submit(order("bid-3", 3, book.Buy, book.Limit, 20, 4))
 
-	// 添加一个买单
-	buyOrder := book.NewOrderInBook(1, "ORD001", 1, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(1.0))
-	_, _ = ob.AddOrder(buyOrder)
-
-	// 取消订单
-	success := ob.CancelOrder("ORD001")
-	assert.True(t, success)
-
-	// 订单应该不在订单簿中
-	order := ob.GetOrderByID("ORD001")
-	assert.Nil(t, order)
+	r := b.Submit(order("fok", 4, book.Sell, book.FOK, 21, 4))
+	require.Equal(t, book.Result{Filled: 4, Fills: []book.Fill{
+		{MakerID: "bid-1", MakerUserID: 1, Price: 22, Qty: 2},
+		{MakerID: "bid-2", MakerUserID: 2, Price: 21, Qty: 2},
+	}}, r)
+	bids, asks := b.Depth(5)
+	require.Equal(t, []book.Level{{Price: 21, Qty: 1, Orders: 1}, {Price: 20, Qty: 4, Orders: 1}}, bids)
+	require.Empty(t, asks)
 }
 
-// TestOrderBook_CancelOrder_NotFound 测试取消不存在的订单
-func TestOrderBook_CancelOrder_NotFound(t *testing.T) {
-	ob := book.NewOrderBook("BTC/USDT")
-
-	success := ob.CancelOrder("NONEXISTENT")
-	assert.False(t, success)
+func TestBook_MarketSellWithoutLiquidity(t *testing.T) {
+	b := book.New()
+	b.Submit(order("ask", 1, book.Sell, book.Limit, 10, 3))
+	r := b.Submit(order("market", 2, book.Sell, book.Market, 0, 2))
+	require.Equal(t, book.Result{Remaining: 2, Reject: book.RejectNoLiquidity}, r)
+	require.Equal(t, 1, b.Len())
 }
 
-// TestOrderBook_GetBestBidAsk 测试最佳买卖价
-func TestOrderBook_GetBestBidAsk(t *testing.T) {
-	ob := book.NewOrderBook("BTC/USDT")
-
-	// 添加多个买单
-	_, _ = ob.AddOrder(book.NewOrderInBook(1, "ORD001", 1, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(1.0)))
-	_, _ = ob.AddOrder(book.NewOrderInBook(2, "ORD002", 1, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(50100), decimal.NewFromFloat(1.0)))
-	_, _ = ob.AddOrder(book.NewOrderInBook(3, "ORD003", 1, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(49900), decimal.NewFromFloat(1.0)))
-
-	// 添加卖单
-	_, _ = ob.AddOrder(book.NewOrderInBook(4, "ORD004", 1, "BTC/USDT",
-		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(50200), decimal.NewFromFloat(1.0)))
-
-	// 最佳买价应该是 50100
-	bestBid := ob.GetBestBid()
-	assert.True(t, bestBid.Equal(decimal.NewFromFloat(50100)))
-
-	// 最佳卖价应该是 50200
-	bestAsk := ob.GetBestAsk()
-	assert.True(t, bestAsk.Equal(decimal.NewFromFloat(50200)))
-
-	// 价差应该是 100
-	spread := ob.GetSpread()
-	assert.True(t, spread.Equal(decimal.NewFromFloat(100)))
-}
-
-// TestOrderInBook_Fill 测试订单成交
-func TestOrderInBook_Fill(t *testing.T) {
-	order := book.NewOrderInBook(1, "ORD001", 1, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(1.0))
-
-	assert.True(t, order.RemainingQty.Equal(decimal.NewFromFloat(1.0)))
-	assert.Equal(t, model.OrderStatusPending, order.Status)
-
-	// 成交 0.3
-	order.Fill(decimal.NewFromFloat(0.3))
-	assert.True(t, order.RemainingQty.Equal(decimal.NewFromFloat(0.7)))
-	assert.Equal(t, model.OrderStatusPartialFilled, order.Status)
-
-	// 成交剩余 0.7
-	order.Fill(decimal.NewFromFloat(0.7))
-	assert.True(t, order.RemainingQty.IsZero())
-	assert.Equal(t, model.OrderStatusFilled, order.Status)
-}
-
-// TestOrderInBook_CanMatch 测试订单匹配条件
-func TestOrderInBook_CanMatch(t *testing.T) {
-	// 测试买单匹配
-	buyOrder := book.NewOrderInBook(1, "ORD001", 1, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(1.0))
-
-	assert.True(t, buyOrder.CanMatch(decimal.NewFromFloat(50000)))   // 等于
-	assert.True(t, buyOrder.CanMatch(decimal.NewFromFloat(49900))) // 低于
-	assert.False(t, buyOrder.CanMatch(decimal.NewFromFloat(50100))) // 高于
-
-	// 测试卖单匹配
-	sellOrder := book.NewOrderInBook(2, "ORD002", 1, "BTC/USDT",
-		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(1.0))
-
-	assert.True(t, sellOrder.CanMatch(decimal.NewFromFloat(50000)))   // 等于
-	assert.True(t, sellOrder.CanMatch(decimal.NewFromFloat(50100)))  // 高于
-	assert.False(t, sellOrder.CanMatch(decimal.NewFromFloat(49900)))  // 低于
-}
-
-// TestOrderBook_MultipleMatching 测试多笔订单撮合
-func TestOrderBook_MultipleMatching(t *testing.T) {
-	ob := book.NewOrderBook("BTC/USDT")
-
-	// 添加多个卖单
-	_, _ = ob.AddOrder(book.NewOrderInBook(1, "ORD001", 1, "BTC/USDT",
-		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(0.5)))
-	_, _ = ob.AddOrder(book.NewOrderInBook(2, "ORD002", 1, "BTC/USDT",
-		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(50050), decimal.NewFromFloat(0.5)))
-
-	// 添加一个买单，应该与两个卖单都成交
-	buyOrder := book.NewOrderInBook(3, "ORD003", 2, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(50100), decimal.NewFromFloat(0.8))
-	trades, err := ob.AddOrder(buyOrder)
-
-	// 应该成交 2 笔
-	assert.NoError(t, err)
-	assert.Len(t, trades, 2)
-
-	// 买单应该还剩 0.2 未成交（在订单簿中）
-	buyOrderAfter := ob.GetOrderByID("ORD003")
-	if buyOrderAfter != nil {
-		assert.True(t, buyOrderAfter.RemainingQty.Equal(decimal.NewFromFloat(0.2)))
+func TestBook_NonRestingRemainders(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		kind book.Kind
+	}{
+		{"market", book.Market},
+		{"ioc", book.IOC},
+		{"limit", book.Limit},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			b := book.New()
+			b.Submit(order("bid", 1, book.Buy, book.Limit, 20, 1))
+			r := b.Submit(order("sell", 2, book.Sell, tt.kind, 20, 2))
+			require.Equal(t, book.Result{
+				Filled: 1, Remaining: 1, Resting: tt.kind == book.Limit,
+				Fills: []book.Fill{{MakerID: "bid", MakerUserID: 1, Price: 20, Qty: 1}},
+			}, r)
+			require.Equal(t, tt.kind == book.Limit, b.Has("sell"))
+		})
 	}
 }
 
-// TestGenerateTradeID 测试交易ID生成
-func TestGenerateTradeID(t *testing.T) {
-	id := book.GenerateTradeID()
-	assert.NotEmpty(t, id)
-	// ID 应该以 TRD 开头
-	assert.Contains(t, id, "TRD")
+func TestBook_CancelUpdatesLevelAndPreservesFIFO(t *testing.T) {
+	b := book.New()
+	b.Submit(order("first", 1, book.Buy, book.Limit, 10, 1))
+	b.Submit(order("middle", 2, book.Buy, book.Limit, 10, 2))
+	b.Submit(order("last", 3, book.Buy, book.Limit, 10, 3))
+	b.Submit(order("best", 4, book.Buy, book.Limit, 11, 4))
+
+	remaining, ok := b.Cancel("middle")
+	require.True(t, ok)
+	require.EqualValues(t, 2, remaining)
+	_, ok = b.Cancel("middle")
+	require.False(t, ok)
+	bids, _ := b.Depth(1)
+	require.Equal(t, []book.Level{{Price: 11, Qty: 4, Orders: 1}}, bids)
+	bids[0].Qty = 0
+	bids, _ = b.Depth(2)
+	require.Equal(t, []book.Level{{Price: 11, Qty: 4, Orders: 1}, {Price: 10, Qty: 4, Orders: 2}}, bids)
+
+	r := b.Submit(order("sweep", 5, book.Sell, book.Market, 99, 6))
+	require.Equal(t, []book.Fill{
+		{MakerID: "best", MakerUserID: 4, Price: 11, Qty: 4},
+		{MakerID: "first", MakerUserID: 1, Price: 10, Qty: 1},
+		{MakerID: "last", MakerUserID: 3, Price: 10, Qty: 1},
+	}, r.Fills)
+	require.Equal(t, []book.Resting{{ID: "last", UserID: 3, Side: book.Buy, Price: 10, Remaining: 2}}, b.Resting())
 }
 
-// TestOrderBook_SellSideMatching 测试卖单匹配
-func TestOrderBook_SellSideMatching(t *testing.T) {
-	ob := book.NewOrderBook("BTC/USDT")
-
-	// 添加多个买单
-	_, _ = ob.AddOrder(book.NewOrderInBook(1, "ORD001", 1, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(0.5)))
-	_, _ = ob.AddOrder(book.NewOrderInBook(2, "ORD002", 1, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(49900), decimal.NewFromFloat(0.5)))
-
-	// 添加一个卖单，应该与买单价最高的买单成交
-	sellOrder := book.NewOrderInBook(3, "ORD003", 2, "BTC/USDT",
-		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(49800), decimal.NewFromFloat(0.3))
-	trades, err := ob.AddOrder(sellOrder)
-
-	// 应该成交 1 笔
-	assert.NoError(t, err)
-	assert.Len(t, trades, 1)
-	assert.Equal(t, "ORD003", trades[0].SellOrderID)
-	assert.True(t, trades[0].Price.Equal(decimal.NewFromFloat(50000))) // 吃的是最佳买价
-}
-
-// TestOrderBook_PricePriority 测试价格优先级
-func TestOrderBook_PricePriority(t *testing.T) {
-	ob := book.NewOrderBook("BTC/USDT")
-
-	// 添加价格相同的卖单
-	_, _ = ob.AddOrder(book.NewOrderInBook(1, "ORD001", 1, "BTC/USDT",
-		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(1.0)))
-	_, _ = ob.AddOrder(book.NewOrderInBook(2, "ORD002", 1, "BTC/USDT",
-		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(1.0)))
-
-	// 买单应该成交两笔
-	buyOrder := book.NewOrderInBook(3, "ORD003", 2, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(50100), decimal.NewFromFloat(1.5))
-	trades, err := ob.AddOrder(buyOrder)
-
-	assert.NoError(t, err)
-	assert.Len(t, trades, 2)
-	// 买单成交量为 1.0 + 0.5 = 1.5，应该完全成交
-	assert.True(t, buyOrder.RemainingQty.IsZero())
-}
-
-// TestOrderBook_MarketOrder_FullFill 测试市场订单完全成交
-func TestOrderBook_MarketOrder_FullFill(t *testing.T) {
-	ob := book.NewOrderBook("BTC/USDT")
-
-	// 添加多个卖单
-	_, _ = ob.AddOrder(book.NewOrderInBook(1, "ORD001", 1, "BTC/USDT",
-		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(30)))
-	_, _ = ob.AddOrder(book.NewOrderInBook(2, "ORD002", 1, "BTC/USDT",
-		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(50001), decimal.NewFromFloat(40)))
-	_, _ = ob.AddOrder(book.NewOrderInBook(3, "ORD003", 1, "BTC/USDT",
-		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(50002), decimal.NewFromFloat(40)))
-
-	// 市场买单应该成交 3 笔，总计 100
-	buyOrder := book.NewOrderInBook(4, "ORD004", 2, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeMarket, decimal.Zero, decimal.NewFromFloat(100))
-	trades, err := ob.AddOrder(buyOrder)
-
-	assert.NoError(t, err)
-	assert.Len(t, trades, 3)
-
-	// 计算总成交数量
-	var totalFilled decimal.Decimal
-	for _, trade := range trades {
-		totalFilled = totalFilled.Add(trade.Quantity)
+func TestBook_RestoreIsAtomicAndPreservesFIFO(t *testing.T) {
+	b := book.New()
+	orders := []book.Resting{
+		{ID: "bid", UserID: 1, Side: book.Buy, Price: 9, Remaining: 1},
+		{ID: "z", UserID: 2, Side: book.Sell, Price: 10, Remaining: 2},
+		{ID: "a", UserID: 3, Side: book.Sell, Price: 10, Remaining: 3},
 	}
-	assert.True(t, totalFilled.Equal(decimal.NewFromFloat(100)))
-
-	// 市场单不应留在订单簿中
-	order := ob.GetOrderByID("ORD004")
-	assert.Nil(t, order)
+	require.Error(t, b.Restore(append(orders, orders[0])))
+	require.Zero(t, b.Len())
+	require.NoError(t, b.Restore(orders))
+	require.Equal(t, orders, b.Resting())
+	require.Error(t, b.Restore(nil))
+	r := b.Submit(order("taker", 4, book.Buy, book.IOC, 10, 2))
+	require.Equal(t, []book.Fill{{MakerID: "z", MakerUserID: 2, Price: 10, Qty: 2}}, r.Fills)
 }
 
-// TestOrderBook_MarketOrder_PartialFill 测试市场订单部分成交
-func TestOrderBook_MarketOrder_PartialFill(t *testing.T) {
-	ob := book.NewOrderBook("BTC/USDT")
-
-	// 添加卖单总量只有 60
-	_, _ = ob.AddOrder(book.NewOrderInBook(1, "ORD001", 1, "BTC/USDT",
-		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(60)))
-
-	// 市场买单 100，但只有 60 可成交
-	buyOrder := book.NewOrderInBook(2, "ORD002", 2, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeMarket, decimal.Zero, decimal.NewFromFloat(100))
-	trades, err := ob.AddOrder(buyOrder)
-
-	assert.NoError(t, err)
-	assert.Len(t, trades, 1)
-	assert.True(t, trades[0].Quantity.Equal(decimal.NewFromFloat(60)))
-	assert.True(t, buyOrder.UnfilledQty.Equal(decimal.NewFromFloat(40)))
-
-	// 市场单不应留在订单簿中
-	order := ob.GetOrderByID("ORD002")
-	assert.Nil(t, order)
+func TestBook_RejectsAggregateOverflow(t *testing.T) {
+	b := book.New()
+	b.Submit(order("large", 1, book.Buy, book.Limit, 10, math.MaxInt64-1))
+	require.NoError(t, b.CheckSubmit(order("last-tick", 2, book.Buy, book.Limit, 10, 1)))
+	b.Submit(order("last-tick", 2, book.Buy, book.Limit, 10, 1))
+	tooLarge := order("overflow", 3, book.Buy, book.Limit, 10, 1)
+	require.ErrorIs(t, b.CheckSubmit(tooLarge), book.ErrLevelOverflow)
+	bids, _ := b.Depth(1)
+	require.Equal(t, []book.Level{{Price: 10, Qty: math.MaxInt64, Orders: 2}}, bids)
+	require.ErrorIs(t, book.New().Restore(append(b.Resting(), book.Resting{
+		ID: "overflow", UserID: 3, Side: book.Buy, Price: 10, Remaining: 1,
+	})), book.ErrLevelOverflow)
 }
 
-// TestOrderBook_MarketSellOrder_BestBid 测试市场卖单按最优买价成交
-func TestOrderBook_MarketSellOrder_BestBid(t *testing.T) {
-	ob := book.NewOrderBook("BTC/USDT")
-
-	// 添加多个买单
-	_, _ = ob.AddOrder(book.NewOrderInBook(1, "ORD001", 1, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(30)))
-	_, _ = ob.AddOrder(book.NewOrderInBook(2, "ORD002", 1, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeLimit, decimal.NewFromFloat(49900), decimal.NewFromFloat(40)))
-
-	// 市场卖单应按最优买价 50000 成交
-	sellOrder := book.NewOrderInBook(3, "ORD003", 2, "BTC/USDT",
-		model.OrderSideSell, model.OrderTypeMarket, decimal.Zero, decimal.NewFromFloat(20))
-	trades, err := ob.AddOrder(sellOrder)
-
-	assert.NoError(t, err)
-	assert.Len(t, trades, 1)
-	assert.True(t, trades[0].Price.Equal(decimal.NewFromFloat(50000)))
-	assert.True(t, trades[0].Quantity.Equal(decimal.NewFromFloat(20)))
+func TestBook_FOKLiquidityAvoidsOverflowAcrossLevels(t *testing.T) {
+	b := book.New()
+	b.Submit(order("best", 1, book.Sell, book.Limit, 10, math.MaxInt64-1))
+	b.Submit(order("next", 2, book.Sell, book.Limit, 11, math.MaxInt64))
+	r := b.Submit(order("fok", 3, book.Buy, book.FOK, 11, math.MaxInt64))
+	require.EqualValues(t, math.MaxInt64, r.Filled)
+	require.Zero(t, r.Remaining)
+	require.Len(t, r.Fills, 2)
+	require.EqualValues(t, 1, r.Fills[1].Qty)
 }
-
-// TestOrderBook_IOCOrder_PartialFill 测试 IOC 订单部分成交后取消剩余
-func TestOrderBook_IOCOrder_PartialFill(t *testing.T) {
-	ob := book.NewOrderBook("BTC/USDT")
-
-	// 添加卖单只有 60
-	_, _ = ob.AddOrder(book.NewOrderInBook(1, "ORD001", 1, "BTC/USDT",
-		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(60)))
-
-	// IOC 买单 100，只成交 60，剩余 40 取消
-	buyOrder := book.NewOrderInBook(2, "ORD002", 2, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeIOC, decimal.NewFromFloat(50000), decimal.NewFromFloat(100))
-	trades, err := ob.AddOrder(buyOrder)
-
-	assert.NoError(t, err)
-	assert.Len(t, trades, 1)
-	assert.True(t, trades[0].Quantity.Equal(decimal.NewFromFloat(60)))
-	assert.True(t, buyOrder.UnfilledQty.Equal(decimal.NewFromFloat(40)))
-
-	// IOC 订单不应留在订单簿中
-	order := ob.GetOrderByID("ORD002")
-	assert.Nil(t, order)
-
-	// 卖单已完全成交，应被清理
-	sellOrder := ob.GetOrderByID("ORD001")
-	assert.Nil(t, sellOrder)
-}
-
-// TestOrderBook_IOCOrder_FullFill 测试 IOC 订单完全成交
-func TestOrderBook_IOCOrder_FullFill(t *testing.T) {
-	ob := book.NewOrderBook("BTC/USDT")
-
-	// 添加卖单 100
-	_, _ = ob.AddOrder(book.NewOrderInBook(1, "ORD001", 1, "BTC/USDT",
-		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(100)))
-
-	// IOC 买单 100，完全成交
-	buyOrder := book.NewOrderInBook(2, "ORD002", 2, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeIOC, decimal.NewFromFloat(50000), decimal.NewFromFloat(100))
-	trades, err := ob.AddOrder(buyOrder)
-
-	assert.NoError(t, err)
-	assert.Len(t, trades, 1)
-	assert.True(t, trades[0].Quantity.Equal(decimal.NewFromFloat(100)))
-
-	// IOC 订单不应留在订单簿中
-	order := ob.GetOrderByID("ORD002")
-	assert.Nil(t, order)
-}
-
-// TestOrderBook_IOCOrder_BetterPrice 测试 IOC 订单在更优价格成交
-func TestOrderBook_IOCOrder_BetterPrice(t *testing.T) {
-	ob := book.NewOrderBook("BTC/USDT")
-
-	// 添加卖单价格 49900（低于 IOC 买单价 50000）
-	_, _ = ob.AddOrder(book.NewOrderInBook(1, "ORD001", 1, "BTC/USDT",
-		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(49900), decimal.NewFromFloat(50)))
-
-	// IOC 买单限价 50000，应在 49900 成交
-	buyOrder := book.NewOrderInBook(2, "ORD002", 2, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeIOC, decimal.NewFromFloat(50000), decimal.NewFromFloat(50))
-	trades, err := ob.AddOrder(buyOrder)
-
-	assert.NoError(t, err)
-	assert.Len(t, trades, 1)
-	assert.True(t, trades[0].Price.Equal(decimal.NewFromFloat(49900)))
-}
-
-// TestOrderBook_FOKOrder_PartialFill 测试 FOK 订单部分成交回滚
-func TestOrderBook_FOKOrder_PartialFill(t *testing.T) {
-	ob := book.NewOrderBook("BTC/USDT")
-
-	// 添加卖单只有 60
-	_, _ = ob.AddOrder(book.NewOrderInBook(1, "ORD001", 1, "BTC/USDT",
-		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(60)))
-
-	// FOK 买单 100，无法完全成交，应回滚
-	buyOrder := book.NewOrderInBook(2, "ORD002", 2, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeFOK, decimal.NewFromFloat(50000), decimal.NewFromFloat(100))
-	trades, err := ob.AddOrder(buyOrder)
-
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "FOK requires full fill")
-	assert.Empty(t, trades)
-
-	// FOK 订单不应留在订单簿中
-	order := ob.GetOrderByID("ORD002")
-	assert.Nil(t, order)
-
-	// 卖单应未被修改（回滚生效）
-	sellOrder := ob.GetOrderByID("ORD001")
-	assert.NotNil(t, sellOrder)
-	assert.True(t, sellOrder.RemainingQty.Equal(decimal.NewFromFloat(60)))
-}
-
-// TestOrderBook_FOKOrder_FullFill 测试 FOK 订单完全成交
-func TestOrderBook_FOKOrder_FullFill(t *testing.T) {
-	ob := book.NewOrderBook("BTC/USDT")
-
-	// 添加卖单 100
-	_, _ = ob.AddOrder(book.NewOrderInBook(1, "ORD001", 1, "BTC/USDT",
-		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(100)))
-
-	// FOK 买单 100，完全成交
-	buyOrder := book.NewOrderInBook(2, "ORD002", 2, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeFOK, decimal.NewFromFloat(50000), decimal.NewFromFloat(100))
-	trades, err := ob.AddOrder(buyOrder)
-
-	assert.NoError(t, err)
-	assert.Len(t, trades, 1)
-	assert.True(t, trades[0].Quantity.Equal(decimal.NewFromFloat(100)))
-
-	// FOK 订单不应留在订单簿中
-	order := ob.GetOrderByID("ORD002")
-	assert.Nil(t, order)
-}
-
-// TestOrderBook_FOKOrder_MultiLevelFill 测试 FOK 订单跨多价格层完全成交
-func TestOrderBook_FOKOrder_MultiLevelFill(t *testing.T) {
-	ob := book.NewOrderBook("BTC/USDT")
-
-	// 添加多个价格层的卖单总计 100
-	_, _ = ob.AddOrder(book.NewOrderInBook(1, "ORD001", 1, "BTC/USDT",
-		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(50000), decimal.NewFromFloat(30)))
-	_, _ = ob.AddOrder(book.NewOrderInBook(2, "ORD002", 1, "BTC/USDT",
-		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(50001), decimal.NewFromFloat(40)))
-	_, _ = ob.AddOrder(book.NewOrderInBook(3, "ORD003", 1, "BTC/USDT",
-		model.OrderSideSell, model.OrderTypeLimit, decimal.NewFromFloat(50002), decimal.NewFromFloat(40)))
-
-	// FOK 买单 100，跨三个价格层成交
-	buyOrder := book.NewOrderInBook(4, "ORD004", 2, "BTC/USDT",
-		model.OrderSideBuy, model.OrderTypeFOK, decimal.NewFromFloat(50100), decimal.NewFromFloat(100))
-	trades, err := ob.AddOrder(buyOrder)
-
-	assert.NoError(t, err)
-	assert.Len(t, trades, 3)
-
-	var totalFilled decimal.Decimal
-	for _, trade := range trades {
-		totalFilled = totalFilled.Add(trade.Quantity)
-	}
-	assert.True(t, totalFilled.Equal(decimal.NewFromFloat(100)))
-
-	// FOK 订单不应留在订单簿中
-	order := ob.GetOrderByID("ORD004")
-	assert.Nil(t, order)
-}
-
-func BenchmarkOrderBook_AddOrder_10KPriceLevels(b *testing.B) {
-	b.StopTimer()
-	ob := book.NewOrderBook("BTC/USDT")
-	for i := 0; i < 10000; i++ {
-		price := float64(i) + 10000.0
-		ob.AddOrder(book.NewOrderInBook(int64(i), fmt.Sprintf("ORD%d", i), 1, "BTC/USDT",
-			model.OrderSideBuy, model.OrderTypeLimit,
-			decimal.NewFromFloat(price), decimal.NewFromFloat(1.0)))
-	}
-	b.StartTimer()
-	for i := 0; i < b.N; i++ {
-		ob.AddOrder(book.NewOrderInBook(99999, "ORD_NEW", 1, "BTC/USDT",
-			model.OrderSideBuy, model.OrderTypeLimit,
-			decimal.NewFromFloat(20000.5), decimal.NewFromFloat(1.0)))
-	}
-}
-

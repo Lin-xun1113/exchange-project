@@ -1,348 +1,90 @@
-# Exchange Project - 加密资产现货撮合引擎
+# Exchange Project · 现货撮合与结算
 
-## 项目概述
+Go 1.25 现货交易所演示项目。Gateway 提供 HTTP 接口，通过 gRPC 调用用户、订单和撮合服务。
 
-这是一个基于 Go 语言实现的加密资产现货撮合引擎项目。项目采用微服务架构，包含 API Gateway、User Service、Order Service、Matching Service 四个核心服务，通过 gRPC 实现强类型服务间通信。
-
-## 技术栈
-
-| 分类 | 技术 |
-|------|------|
-| 语言 | Go 1.25.8 |
-| Web 框架 | Gin |
-| RPC | gRPC + Protobuf |
-| 数据库 | MySQL + GORM |
-| 缓存 | Redis (go-redis/redis/v9) |
-| 监控 | Prometheus |
-| 追踪 | OpenTelemetry + Jaeger |
-| 熔断 | gobreaker (sony/gobreaker) |
-| 日志 | zap |
-| 容器化 | Docker + Docker Compose |
-
-## 核心功能
-
-- [x] 撮合引擎 (Matching Engine) - Per-Symbol Actor 模型
-- [x] 订单簿 (OrderBook) - 跳表实现价格优先 + 时间优先
-- [x] **订单类型**: 支持 Limit / Market / IOC / FOK 四种类型
-- [x] 订单管理 (Order Service)
-- [x] 用户账户 (User Service)
-- [x] JWT 认证 (HS256)
-- [x] RBAC 权限控制 (admin/trader/viewer)
-- [x] 幂等设计 (Redis + MySQL 三级防护)
-- [x] Cache-Aside 缓存模式 (5min TTL)
-- [x] Redis 分布式锁 (SetNX)
-- [x] Redis Stream 事件分发 (Consumer Group)
-- [x] Worker Pool 并发处理（队列满时拒绝新任务，队列深度指标不包含正在执行的任务）
-- [x] gRPC 拦截器 (超时/重试/熔断)
-- [x] 统一错误码
-- [x] 结构化日志（request_id 链路，支持并发首次调用）
-- [x] **Saga 编排模式** - 订单创建 Saga 编排器
-- [x] **事务性 Outbox 模式** - 可靠消息投递, 指数退避 + jitter 重试
-- [x] **分布式限流** - Sliding Window 算法 + Redis
-- [x] **熔断器保护** - Circuit Breaker (gobreaker)
-- [x] **WAL + Snapshot 恢复** - Group Commit fsync + 目录同步，零数据丢失
-- [x] **Prometheus 指标扩展** - 覆盖 HTTP/gRPC/撮合/Saga/Outbox/限流/WAL
-
-## 支持的订单类型
-
-本项目支持 **4 种订单类型**，覆盖主流交易所的核心功能：
-
-| 类型 | 名称 | 说明 |
-|------|------|------|
-| `limit` | 限价单 | 价格优先 + 时间优先,未成交部分挂入订单簿 |
-| `market` | 市价单 | 以对手方最优价格立即成交,剩余撤销 |
-| `ioc` | Immediate-Or-Cancel | 即时成交或取消,不允许挂单 |
-| `fok` | Fill-Or-Kill | 全部成交或全部取消,不允许部分成交 |
-
-### 限价单 (Limit Order)
-
-```
-用户以指定价格下单,若当时无法完全成交,则未成交部分进入订单簿等待。
-
-撮合规则:
-- 买单: 按价格降序 (价格越高越优先)
-- 卖单: 按价格升序 (价格越低越优先)
-- 同价位: 按时间升序 (先到先得,纳秒级 FIFO)
-```
-
-**示例**:
-```
-买单: [price=100, qty=10] → 匹配价格 ≤ 100 的卖单
-卖单: [price=101, qty=10] → 匹配价格 ≥ 101 的买单
-```
-
-### 市价单 (Market Order)
-
-```
-无价格限制,直接以对手方最优价格成交,适用于追求快速成交的场景。
-
-特点:
-- 无需指定价格 (price 字段可设为 0)
-- 立即与订单簿中对侧最优价格撮合
-- 无法成交部分直接撤销 (UnfilledQty)
-```
-
-**示例**:
-```
-市场上有卖单: [price=100, qty=5], [price=101, qty=5]
-市价买单: [qty=8] → 成交 5@100 + 3@101, 撤销剩余 2
-```
-
-### IOC 单 (Immediate-Or-Cancel)
-
-```
-立即尝试成交,未成交部分立即取消,不允许挂单等待。
-
-特点:
-- 部分成交可接受
-- 未成交数量立即撤销,不入订单簿
-- 适用于需要流动性但不愿影响盘口的情况
-```
-
-**示例**:
-```
-订单簿卖单: [price=100, qty=3]
-IOC 买单: [price=105, qty=10] → 成交 3@100, 撤销剩余 7
-```
-
-### FOK 单 (Fill-Or-Kill)
-
-```
-必须全部成交,否则全部取消。适用于大单需要一次性吃光盘口。
-
-特点:
-- 必须全部成交
-- 无法全部成交时整个订单取消
-- 对盘口深度要求高,不适合流动性差的交易对
-
-回滚机制:
-- 若无法全部成交,自动回滚已撮合的交易
-- 保证账户余额状态不变
-```
-
-**示例**:
-```
-订单簿卖单: [price=100, qty=5], [price=101, qty=5] (总共 10)
-FOK 买单: [price=102, qty=10] → 全部成交 (5@100 + 5@101) ✓
-FOK 买单: [price=102, qty=15] → 全部撤销 (盘口不足) ✗
-```
-
-### 订单类型对比
-
-```
-┌──────────┬────────────┬────────────┬────────────────────────┐
-│ 订单类型  │ 价格限制    │ 部分成交     │ 未成交部分处理           │
-├──────────┼────────────┼────────────┼────────────────────────┤
-│ limit    │ ✓ 必须指定  │ ✓ 允许      │ 进入订单簿               │
-│ market   │ ✗ 无需指定  │ ✓ 允许      │ 直接撤销                 │
-│ ioc      │ ✓ 必须指定  │ ✓ 允许      │ 直接撤销                 │
-│ fok      │ ✓ 必须指定  │ ✗ 不允许    │ 全部撤销 + 回滚           │
-└──────────┴────────────┴────────────┴────────────────────────┘
-```
-
-### 订单状态流转
-
-```
-┌──────────┐     ┌────────────────┐     ┌────────┐
-│ Pending  │ ──▶ │ PartialFilled  │ ──▶ │ Filled │  (终态)
-└──────────┘     └────────────────┘     └────────┘
-       │                │
-       ▼                ▼
-┌──────────────┐  ┌───────────┐
-│  Cancelled   │  │ Rejected  │  (终态)
-└──────────────┘  └───────────┘
-
-状态说明:
-- Pending: 订单已提交,等待撮合
-- PartialFilled: 部分成交
-- Filled: 全部成交 (终态)
-- Cancelled: 用户主动撤销 (终态)
-- Rejected: 被系统拒绝 (终态)
-```
-
-## 项目结构
-
-```
-exchange-project/
-├── cmd/                      # 服务入口
-│   ├── gateway/              # API Gateway
-│   ├── user-svc/             # 用户服务
-│   ├── order-svc/            # 订单服务
-│   └── matching-svc/         # 撮合引擎服务
-├── api/
-│   └── proto/                # Protobuf 定义
-├── pkg/                      # 公共包
-│   ├── config/               # 配置管理
-│   ├── errors/               # 统一错误码
-│   ├── logger/               # 结构化日志
-│   ├── metrics/              # Prometheus 指标
-│   ├── tracing/              # OpenTelemetry 追踪
-│   └── response/             # 统一响应
-├── internal/
-│   ├── gateway/              # API Gateway 实现
-│   │   ├── handler/         # HTTP Handler
-│   │   ├── middleware/       # JWT / 限流 / 熔断中间件
-│   │   ├── router/          # 路由配置
-│   │   └── client/          # gRPC 客户端
-│   ├── user/                 # 用户服务
-│   │   ├── repository/      # User Repository (含缓存)
-│   │   ├── service/         # User Service (含分布式锁)
-│   │   └── server/         # gRPC Server
-│   ├── order/                # 订单服务
-│   │   ├── repository/      # Order/Trade Repository
-│   │   ├── service/         # Order Service (幂等)
-│   │   ├── saga/           # Saga 编排器
-│   │   ├── outbox/         # 事务性发件箱
-│   │   └── server/         # gRPC Server
-│   ├── matching/             # 撮合引擎
-│   │   ├── engine/          # Matcher + Actor + WAL/Snapshot
-│   │   ├── book/            # OrderBook (SkipList)
-│   │   ├── wal/            # Write-Ahead Log
-│   │   ├── snapshot/       # 快照管理
-│   │   ├── server/         # gRPC Server
-│   │   └── workerpool/     # Worker Pool
-│   └── notify/               # 通知服务
-│       └── consumer/         # Redis Stream Consumer
-├── test/
-│   └── integration/          # 集成测试 (WAL 恢复测试)
-├── migrations/                # 数据库迁移
-├── docs/                      # 文档
-│   └── interview/            # 面试题解析
-├── openspec/                  # OpenSpec 变更规格
-└── scripts/                  # 工具脚本
-```
-
-## 数据流架构
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         HTTP Client                             │
-└─────────────────────────────┬───────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│API Gateway (Gin) → JWT Middleware → Rate Limit → Circuit Breaker│
-└─────────────────────────────┬───────────────────────────────────┘
-                              │
-        ┌─────────────────────┼─────────────────────┐
-        ▼                     ▼                     ▼
-┌───────────────┐    ┌───────────────┐    ┌───────────────┐
-│ User Service  │    │ Order Service │    │ Matching Svc  │
-│ (gRPC)        │    │ (gRPC)        │    │ (gRPC)        │
-└───────┬───────┘    └───────┬───────┘    └───────┬───────┘
-        │                    │                    │
-        └────────────┬───────┘                    │
-                     ▼                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     Redis / MySQL                               │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │ Cache-Aside │  │  分布式锁    │  │ Redis Stream (事件)      │  │
-│  │ (5min TTL)  │  │  (SetNX)    │  │ Consumer Group          │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────────┘  │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │ MySQL: users / orders / trades / outbox (GORM + 事务)        ││
-│  └─────────────────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
-                              │
-        ┌─────────────────────┴─────────────────────┐
-        ▼                                           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Saga Orchestrator (Order Saga)                                 │
-│  CreateOrderSaga → Outbox Pattern → 补偿事务                     │
-└─────────────────────────────┬───────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Matching Engine                                                │
-│  Matcher → Per-Symbol Actor → OrderBook (SkipList)              │
-│  价格优先 + 时间优先 (纳秒级 FIFO)                                  │
-│  WAL Manager → Write-Ahead Log → Snapshot Recovery              │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## 快速开始
-
-### 1. 启动依赖服务
+## 启动与验证
 
 ```bash
-docker-compose up -d mysql redis jaeger
+docker compose up -d --build --wait
+bash scripts/e2e.sh
 ```
 
-### 2. 启动服务
+网关使用 `http://localhost:8080`，Jaeger 使用 `http://localhost:16686`。每个服务在容器内的 `:9100/metrics` 提供 Prometheus 指标。MySQL 在宿主机使用 `3308`。
+
+新版 MySQL schema 和撮合持久化格式需要使用新卷。`docker compose down -v` 会清除该 Compose 项目的数据库、Redis 和撮合数据，仅在确认可以清空演示环境时使用。
 
 ```bash
-# 启动 API Gateway
-go run cmd/gateway/main.go
+go build ./...
+go vet ./...
+go test ./...
 
-# 启动 User Service
-go run cmd/user-svc/main.go
-
-# 启动 Order Service
-go run cmd/order-svc/main.go
-
-# 启动 Matching Service
-go run cmd/matching-svc/main.go
+docker compose up -d --wait mysql
+TEST_MYSQL_DSN='root:password@tcp(127.0.0.1:3308)/' go test -race ./internal/user/... ./internal/order/...
+go test -race ./internal/matching/... ./internal/gateway/...
 ```
 
-### 3. 访问服务
+E2E 需要 `curl` 和 `jq`，默认访问本地网关，可用 `GATEWAY_URL` 覆盖。脚本会重启当前 Compose 项目的 `matching-svc`，并短暂停止 `order-svc` 验证就绪检查。
 
-- API Gateway: http://localhost:8080
-- Jaeger UI: http://localhost:16686 (分布式追踪)
-- Prometheus 指标: http://localhost:8080/metrics
+## 演示交易台
 
-### 4. WAL/Snapshot 数据卷 (本地开发)
+先停止占用相同宿主机端口的后端栈，再用独立的 Compose 项目启动：
 
 ```bash
-# 手动创建 WAL 和 Snapshot 数据目录
-mkdir -p data/wal data/snapshot
+COMPOSE_PROJECT_NAME=exchange-demo docker compose --profile demo up -d --build
 ```
 
-> Matching Service 会自动使用 Docker Compose 中配置的数据卷进行 WAL 写入和快照保存,用于崩溃恢复。
+种子写入成功后，打开 `http://localhost:8088`，使用 `demo` / `demo1234` 登录。首启写入七天历史成交、实时订单簿和演示委托；完成后不再自动生成成交。默认 profile 不启用种子或 Web，仍可独立运行 E2E。
 
-## API 接口
+演示种子要求新卷；识别到已写入的历史成交会直接退出，不会补写实时订单簿。若初始化中断或未看到 `demo seed complete`，请改用新的 Compose 项目名，不要清除仍需保留的卷。
 
-### 认证
+## 服务边界
 
-| 方法 | 路径 | 描述 |
-|------|------|------|
-| POST | `/api/v1/auth/login` | 用户登录 |
-| POST | `/api/v1/auth/register` | 用户注册 |
+| 服务 | 责任 |
+|---|---|
+| Gateway | JWT、RBAC、Redis 令牌桶限流、HTTP 与 gRPC 转换 |
+| User | 用户与角色、按币种的可用和冻结余额、幂等资金流水 |
+| Order | 订单和成交记录、冻结与撮合编排、成交结算与余量释放 |
+| Matching | 每个交易对一个 Actor、价格优先与同价 FIFO、WAL 与快照 |
 
-### 订单
+订单与首条 Outbox 任务同事务提交。工作器完成下游 RPC 后，在同一事务中更新业务状态、确认当前任务并写入后续任务。买单冻结 `限价 × 数量`，成交以 maker 价格结算，买方收回差价。卖单冻结标的币种的数量。订单状态与资金结算异步推进。
 
-| 方法 | 路径 | 描述 |
-|------|------|------|
-| POST | `/api/v1/orders` | 创建订单 (需要 JWT) |
-| POST | `/api/v1/orders/cancel` | 取消订单 (需要 JWT) |
-| GET | `/api/v1/orders` | 订单列表 (需要 JWT) |
-| GET | `/api/v1/orders/:order_id` | 获取订单 (需要 JWT) |
+撮合 Actor 将命令追加至 WAL、更新簿，再批量同步 WAL 后返回结果。完整快照保留挂簿订单及结果缓存。恢复可从上一有效快照重放后续 WAL。
 
-### 余额
+挂簿订单的结果常驻，终结订单的结果默认保留最近 100,000 个。撮合 RPC 的重试幂等性受此缓存范围约束。Outbox 步骤达到重试上限后会标记 `dead`，保留失败原因。
 
-| 方法 | 路径 | 描述 |
-|------|------|------|
-| GET | `/api/v1/balance` | 获取余额 (需要 JWT) |
+单次提交最多生成 512 笔成交。超过此上限的提交不会改变订单簿，订单工作流会按未成交余量释放冻结资金。
 
-### 订单簿
+## 订单与金额
 
-| 方法 | 路径 | 描述 |
-|------|------|------|
-| GET | `/orderbook/:symbol` | 获取订单簿 |
+默认交易对为 `BTC/USDT,ETH/USDT`，可用 `SYMBOLS` 配置。HTTP 路径中使用 `BTC-USDT`。价格、数量和余额以 JSON 字符串传输，例如 `"20000"` 和 `"0.3"`。价格和数量最多八位小数。
 
-### 健康检查
+| 类型 | 余量与成交规则 |
+|---|---|
+| `limit` | 以限价或更优价格成交，剩余挂簿 |
+| `market` | 仅支持卖单，按买盘价格成交，剩余释放 |
+| `ioc` | 限价立即成交，剩余释放 |
+| `fok` | 先检查可成交数量，足量才撮合 |
 
-| 方法 | 路径 | 描述 |
-|------|------|------|
-| GET | `/healthz` | 健康检查 |
-| GET | `/readyz` | 就绪检查 |
+订单状态为 `pending`、`open`、`partial_filled`、`filled`、`cancelled` 或 `rejected`。不收手续费，允许自成交。充值接口仅供演示。
 
-## Redis 使用场景
+## HTTP 接口
 
-| 场景 | Key Pattern | TTL | 说明 |
-|------|-------------|-----|------|
-| 用户缓存 | `user:{id}` | 5min | Cache-Aside |
-| 订单缓存 | `order:{orderID}` | 5min | Cache-Aside |
-| 幂等 Key | `idempotency:order:{key}` | 24h | 防重复下单 |
-| 分布式锁 | `lock:*:{resource}` | 10s | SetNX |
-| 事件流 | `events` Stream | 持久 | Redis Stream |
-| 限流 | `rate:{scope}:{identity}:{window}` | window+1min | Sliding Window |
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| POST | `/api/v1/auth/register` | 注册 |
+| POST | `/api/v1/auth/login` | 登录并获取 JWT |
+| POST | `/api/v1/account/deposit` | 充值，需要 `Idempotency-Key` |
+| GET | `/api/v1/account/balances` | 查询各币种余额 |
+| POST | `/api/v1/orders` | 下单，需要 `Idempotency-Key` |
+| DELETE | `/api/v1/orders/:order_id` | 请求撤单 |
+| GET | `/api/v1/orders/:order_id` | 查询自己的订单 |
+| GET | `/api/v1/orders` | 游标分页查询自己的订单 |
+| GET | `/api/v1/trades` | 游标分页查询自己的成交 |
+| GET | `/api/v1/market/orderbook/:symbol` | 查询公开盘口 |
+| GET | `/api/v1/market/trades/:symbol` | 查询公开成交，`limit` 默认 50、最大 200 |
+| GET | `/api/v1/market/candles/:symbol` | 查询 K 线，`interval` 默认 `15m`，`limit` 默认 300、最大 1000 |
+| GET | `/api/v1/market/tickers` | 查询 24 小时行情，可用逗号分隔的 `symbols` 筛选 |
+| GET | `/healthz` | 查询网关存活状态 |
+| GET | `/readyz` | 检查三个 gRPC 服务与 Redis |
+
+账户、订单和成交接口使用 `Authorization: Bearer <token>`。客户端可用同一 `Idempotency-Key` 与相同下单参数重试。

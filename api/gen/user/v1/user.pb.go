@@ -22,17 +22,13 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// 用户信息
 type User struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
 	Username      string                 `protobuf:"bytes,2,opt,name=username,proto3" json:"username,omitempty"`
 	Email         string                 `protobuf:"bytes,3,opt,name=email,proto3" json:"email,omitempty"`
-	Balance       string                 `protobuf:"bytes,4,opt,name=balance,proto3" json:"balance,omitempty"` // 使用 string 以避免浮点数精度问题
-	FrozenBalance string                 `protobuf:"bytes,5,opt,name=frozen_balance,json=frozenBalance,proto3" json:"frozen_balance,omitempty"`
-	Status        int32                  `protobuf:"varint,6,opt,name=status,proto3" json:"status,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	Status        int32                  `protobuf:"varint,4,opt,name=status,proto3" json:"status,omitempty"`
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -88,20 +84,6 @@ func (x *User) GetEmail() string {
 	return ""
 }
 
-func (x *User) GetBalance() string {
-	if x != nil {
-		return x.Balance
-	}
-	return ""
-}
-
-func (x *User) GetFrozenBalance() string {
-	if x != nil {
-		return x.FrozenBalance
-	}
-	return ""
-}
-
 func (x *User) GetStatus() int32 {
 	if x != nil {
 		return x.Status
@@ -116,35 +98,29 @@ func (x *User) GetCreatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
-func (x *User) GetUpdatedAt() *timestamppb.Timestamp {
-	if x != nil {
-		return x.UpdatedAt
-	}
-	return nil
-}
-
-// 获取用户请求
-type GetUserRequest struct {
+type CreateUserRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	UserId        int64                  `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
+	Password      string                 `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
+	Email         string                 `protobuf:"bytes,3,opt,name=email,proto3" json:"email,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *GetUserRequest) Reset() {
-	*x = GetUserRequest{}
+func (x *CreateUserRequest) Reset() {
+	*x = CreateUserRequest{}
 	mi := &file_user_v1_user_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *GetUserRequest) String() string {
+func (x *CreateUserRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*GetUserRequest) ProtoMessage() {}
+func (*CreateUserRequest) ProtoMessage() {}
 
-func (x *GetUserRequest) ProtoReflect() protoreflect.Message {
+func (x *CreateUserRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_user_v1_user_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -156,40 +132,53 @@ func (x *GetUserRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use GetUserRequest.ProtoReflect.Descriptor instead.
-func (*GetUserRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use CreateUserRequest.ProtoReflect.Descriptor instead.
+func (*CreateUserRequest) Descriptor() ([]byte, []int) {
 	return file_user_v1_user_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *GetUserRequest) GetUserId() int64 {
+func (x *CreateUserRequest) GetUsername() string {
 	if x != nil {
-		return x.UserId
+		return x.Username
 	}
-	return 0
+	return ""
 }
 
-// 获取用户响应
-type GetUserResponse struct {
+func (x *CreateUserRequest) GetPassword() string {
+	if x != nil {
+		return x.Password
+	}
+	return ""
+}
+
+func (x *CreateUserRequest) GetEmail() string {
+	if x != nil {
+		return x.Email
+	}
+	return ""
+}
+
+type CreateUserResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	User          *User                  `protobuf:"bytes,1,opt,name=user,proto3" json:"user,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *GetUserResponse) Reset() {
-	*x = GetUserResponse{}
+func (x *CreateUserResponse) Reset() {
+	*x = CreateUserResponse{}
 	mi := &file_user_v1_user_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *GetUserResponse) String() string {
+func (x *CreateUserResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*GetUserResponse) ProtoMessage() {}
+func (*CreateUserResponse) ProtoMessage() {}
 
-func (x *GetUserResponse) ProtoReflect() protoreflect.Message {
+func (x *CreateUserResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_user_v1_user_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -201,19 +190,18 @@ func (x *GetUserResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use GetUserResponse.ProtoReflect.Descriptor instead.
-func (*GetUserResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use CreateUserResponse.ProtoReflect.Descriptor instead.
+func (*CreateUserResponse) Descriptor() ([]byte, []int) {
 	return file_user_v1_user_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *GetUserResponse) GetUser() *User {
+func (x *CreateUserResponse) GetUser() *User {
 	if x != nil {
 		return x.User
 	}
 	return nil
 }
 
-// 登录请求
 type LoginRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
@@ -266,7 +254,6 @@ func (x *LoginRequest) GetPassword() string {
 	return ""
 }
 
-// 登录响应
 type LoginResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	UserId        int64                  `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
@@ -327,31 +314,27 @@ func (x *LoginResponse) GetRole() string {
 	return ""
 }
 
-// 创建用户请求
-type CreateUserRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	Username       string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
-	Password       string                 `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
-	Email          string                 `protobuf:"bytes,3,opt,name=email,proto3" json:"email,omitempty"`
-	InitialBalance string                 `protobuf:"bytes,4,opt,name=initial_balance,json=initialBalance,proto3" json:"initial_balance,omitempty"` // 初始余额，string 类型
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+type GetUserRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        int64                  `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CreateUserRequest) Reset() {
-	*x = CreateUserRequest{}
+func (x *GetUserRequest) Reset() {
+	*x = GetUserRequest{}
 	mi := &file_user_v1_user_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CreateUserRequest) String() string {
+func (x *GetUserRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CreateUserRequest) ProtoMessage() {}
+func (*GetUserRequest) ProtoMessage() {}
 
-func (x *CreateUserRequest) ProtoReflect() protoreflect.Message {
+func (x *GetUserRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_user_v1_user_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -363,61 +346,39 @@ func (x *CreateUserRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CreateUserRequest.ProtoReflect.Descriptor instead.
-func (*CreateUserRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use GetUserRequest.ProtoReflect.Descriptor instead.
+func (*GetUserRequest) Descriptor() ([]byte, []int) {
 	return file_user_v1_user_proto_rawDescGZIP(), []int{5}
 }
 
-func (x *CreateUserRequest) GetUsername() string {
+func (x *GetUserRequest) GetUserId() int64 {
 	if x != nil {
-		return x.Username
+		return x.UserId
 	}
-	return ""
+	return 0
 }
 
-func (x *CreateUserRequest) GetPassword() string {
-	if x != nil {
-		return x.Password
-	}
-	return ""
-}
-
-func (x *CreateUserRequest) GetEmail() string {
-	if x != nil {
-		return x.Email
-	}
-	return ""
-}
-
-func (x *CreateUserRequest) GetInitialBalance() string {
-	if x != nil {
-		return x.InitialBalance
-	}
-	return ""
-}
-
-// 创建用户响应
-type CreateUserResponse struct {
+type GetUserResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	User          *User                  `protobuf:"bytes,1,opt,name=user,proto3" json:"user,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CreateUserResponse) Reset() {
-	*x = CreateUserResponse{}
+func (x *GetUserResponse) Reset() {
+	*x = GetUserResponse{}
 	mi := &file_user_v1_user_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CreateUserResponse) String() string {
+func (x *GetUserResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CreateUserResponse) ProtoMessage() {}
+func (*GetUserResponse) ProtoMessage() {}
 
-func (x *CreateUserResponse) ProtoReflect() protoreflect.Message {
+func (x *GetUserResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_user_v1_user_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -429,40 +390,41 @@ func (x *CreateUserResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CreateUserResponse.ProtoReflect.Descriptor instead.
-func (*CreateUserResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use GetUserResponse.ProtoReflect.Descriptor instead.
+func (*GetUserResponse) Descriptor() ([]byte, []int) {
 	return file_user_v1_user_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *CreateUserResponse) GetUser() *User {
+func (x *GetUserResponse) GetUser() *User {
 	if x != nil {
 		return x.User
 	}
 	return nil
 }
 
-// 获取余额请求
-type GetBalanceRequest struct {
+type Balance struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	UserId        int64                  `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Asset         string                 `protobuf:"bytes,1,opt,name=asset,proto3" json:"asset,omitempty"`
+	Available     string                 `protobuf:"bytes,2,opt,name=available,proto3" json:"available,omitempty"`
+	Frozen        string                 `protobuf:"bytes,3,opt,name=frozen,proto3" json:"frozen,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *GetBalanceRequest) Reset() {
-	*x = GetBalanceRequest{}
+func (x *Balance) Reset() {
+	*x = Balance{}
 	mi := &file_user_v1_user_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *GetBalanceRequest) String() string {
+func (x *Balance) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*GetBalanceRequest) ProtoMessage() {}
+func (*Balance) ProtoMessage() {}
 
-func (x *GetBalanceRequest) ProtoReflect() protoreflect.Message {
+func (x *Balance) ProtoReflect() protoreflect.Message {
 	mi := &file_user_v1_user_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -474,43 +436,53 @@ func (x *GetBalanceRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use GetBalanceRequest.ProtoReflect.Descriptor instead.
-func (*GetBalanceRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use Balance.ProtoReflect.Descriptor instead.
+func (*Balance) Descriptor() ([]byte, []int) {
 	return file_user_v1_user_proto_rawDescGZIP(), []int{7}
 }
 
-func (x *GetBalanceRequest) GetUserId() int64 {
+func (x *Balance) GetAsset() string {
 	if x != nil {
-		return x.UserId
+		return x.Asset
 	}
-	return 0
+	return ""
 }
 
-// 获取余额响应
-type GetBalanceResponse struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	UserId           int64                  `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	AvailableBalance string                 `protobuf:"bytes,2,opt,name=available_balance,json=availableBalance,proto3" json:"available_balance,omitempty"` // 可用余额
-	FrozenBalance    string                 `protobuf:"bytes,3,opt,name=frozen_balance,json=frozenBalance,proto3" json:"frozen_balance,omitempty"`          // 冻结余额
-	TotalBalance     string                 `protobuf:"bytes,4,opt,name=total_balance,json=totalBalance,proto3" json:"total_balance,omitempty"`             // 总余额
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+func (x *Balance) GetAvailable() string {
+	if x != nil {
+		return x.Available
+	}
+	return ""
 }
 
-func (x *GetBalanceResponse) Reset() {
-	*x = GetBalanceResponse{}
+func (x *Balance) GetFrozen() string {
+	if x != nil {
+		return x.Frozen
+	}
+	return ""
+}
+
+type GetBalancesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        int64                  `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetBalancesRequest) Reset() {
+	*x = GetBalancesRequest{}
 	mi := &file_user_v1_user_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *GetBalanceResponse) String() string {
+func (x *GetBalancesRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*GetBalanceResponse) ProtoMessage() {}
+func (*GetBalancesRequest) ProtoMessage() {}
 
-func (x *GetBalanceResponse) ProtoReflect() protoreflect.Message {
+func (x *GetBalancesRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_user_v1_user_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -522,63 +494,39 @@ func (x *GetBalanceResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use GetBalanceResponse.ProtoReflect.Descriptor instead.
-func (*GetBalanceResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use GetBalancesRequest.ProtoReflect.Descriptor instead.
+func (*GetBalancesRequest) Descriptor() ([]byte, []int) {
 	return file_user_v1_user_proto_rawDescGZIP(), []int{8}
 }
 
-func (x *GetBalanceResponse) GetUserId() int64 {
+func (x *GetBalancesRequest) GetUserId() int64 {
 	if x != nil {
 		return x.UserId
 	}
 	return 0
 }
 
-func (x *GetBalanceResponse) GetAvailableBalance() string {
-	if x != nil {
-		return x.AvailableBalance
-	}
-	return ""
-}
-
-func (x *GetBalanceResponse) GetFrozenBalance() string {
-	if x != nil {
-		return x.FrozenBalance
-	}
-	return ""
-}
-
-func (x *GetBalanceResponse) GetTotalBalance() string {
-	if x != nil {
-		return x.TotalBalance
-	}
-	return ""
-}
-
-// 冻结余额请求
-type FreezeAmountRequest struct {
+type GetBalancesResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	UserId        int64                  `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	Amount        string                 `protobuf:"bytes,2,opt,name=amount,proto3" json:"amount,omitempty"`                  // 冻结金额
-	OrderId       string                 `protobuf:"bytes,3,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"` // 关联订单ID
+	Balances      []*Balance             `protobuf:"bytes,1,rep,name=balances,proto3" json:"balances,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *FreezeAmountRequest) Reset() {
-	*x = FreezeAmountRequest{}
+func (x *GetBalancesResponse) Reset() {
+	*x = GetBalancesResponse{}
 	mi := &file_user_v1_user_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *FreezeAmountRequest) String() string {
+func (x *GetBalancesResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*FreezeAmountRequest) ProtoMessage() {}
+func (*GetBalancesResponse) ProtoMessage() {}
 
-func (x *FreezeAmountRequest) ProtoReflect() protoreflect.Message {
+func (x *GetBalancesResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_user_v1_user_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -590,56 +538,42 @@ func (x *FreezeAmountRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use FreezeAmountRequest.ProtoReflect.Descriptor instead.
-func (*FreezeAmountRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use GetBalancesResponse.ProtoReflect.Descriptor instead.
+func (*GetBalancesResponse) Descriptor() ([]byte, []int) {
 	return file_user_v1_user_proto_rawDescGZIP(), []int{9}
 }
 
-func (x *FreezeAmountRequest) GetUserId() int64 {
+func (x *GetBalancesResponse) GetBalances() []*Balance {
 	if x != nil {
-		return x.UserId
+		return x.Balances
 	}
-	return 0
+	return nil
 }
 
-func (x *FreezeAmountRequest) GetAmount() string {
-	if x != nil {
-		return x.Amount
-	}
-	return ""
+type DepositRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        int64                  `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Asset         string                 `protobuf:"bytes,2,opt,name=asset,proto3" json:"asset,omitempty"`
+	Amount        string                 `protobuf:"bytes,3,opt,name=amount,proto3" json:"amount,omitempty"`
+	RefId         string                 `protobuf:"bytes,4,opt,name=ref_id,json=refId,proto3" json:"ref_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
-func (x *FreezeAmountRequest) GetOrderId() string {
-	if x != nil {
-		return x.OrderId
-	}
-	return ""
-}
-
-// 冻结余额响应
-type FreezeAmountResponse struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	Success             bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	NewAvailableBalance string                 `protobuf:"bytes,2,opt,name=new_available_balance,json=newAvailableBalance,proto3" json:"new_available_balance,omitempty"`
-	NewFrozenBalance    string                 `protobuf:"bytes,3,opt,name=new_frozen_balance,json=newFrozenBalance,proto3" json:"new_frozen_balance,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
-}
-
-func (x *FreezeAmountResponse) Reset() {
-	*x = FreezeAmountResponse{}
+func (x *DepositRequest) Reset() {
+	*x = DepositRequest{}
 	mi := &file_user_v1_user_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *FreezeAmountResponse) String() string {
+func (x *DepositRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*FreezeAmountResponse) ProtoMessage() {}
+func (*DepositRequest) ProtoMessage() {}
 
-func (x *FreezeAmountResponse) ProtoReflect() protoreflect.Message {
+func (x *DepositRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_user_v1_user_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -651,56 +585,60 @@ func (x *FreezeAmountResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use FreezeAmountResponse.ProtoReflect.Descriptor instead.
-func (*FreezeAmountResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use DepositRequest.ProtoReflect.Descriptor instead.
+func (*DepositRequest) Descriptor() ([]byte, []int) {
 	return file_user_v1_user_proto_rawDescGZIP(), []int{10}
 }
 
-func (x *FreezeAmountResponse) GetSuccess() bool {
+func (x *DepositRequest) GetUserId() int64 {
 	if x != nil {
-		return x.Success
+		return x.UserId
 	}
-	return false
+	return 0
 }
 
-func (x *FreezeAmountResponse) GetNewAvailableBalance() string {
+func (x *DepositRequest) GetAsset() string {
 	if x != nil {
-		return x.NewAvailableBalance
-	}
-	return ""
-}
-
-func (x *FreezeAmountResponse) GetNewFrozenBalance() string {
-	if x != nil {
-		return x.NewFrozenBalance
+		return x.Asset
 	}
 	return ""
 }
 
-// 解冻余额请求
-type UnfreezeAmountRequest struct {
+func (x *DepositRequest) GetAmount() string {
+	if x != nil {
+		return x.Amount
+	}
+	return ""
+}
+
+func (x *DepositRequest) GetRefId() string {
+	if x != nil {
+		return x.RefId
+	}
+	return ""
+}
+
+type DepositResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	UserId        int64                  `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	Amount        string                 `protobuf:"bytes,2,opt,name=amount,proto3" json:"amount,omitempty"`                  // 解冻金额
-	OrderId       string                 `protobuf:"bytes,3,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"` // 关联订单ID
+	Balance       *Balance               `protobuf:"bytes,1,opt,name=balance,proto3" json:"balance,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *UnfreezeAmountRequest) Reset() {
-	*x = UnfreezeAmountRequest{}
+func (x *DepositResponse) Reset() {
+	*x = DepositResponse{}
 	mi := &file_user_v1_user_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *UnfreezeAmountRequest) String() string {
+func (x *DepositResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*UnfreezeAmountRequest) ProtoMessage() {}
+func (*DepositResponse) ProtoMessage() {}
 
-func (x *UnfreezeAmountRequest) ProtoReflect() protoreflect.Message {
+func (x *DepositResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_user_v1_user_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -712,56 +650,42 @@ func (x *UnfreezeAmountRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use UnfreezeAmountRequest.ProtoReflect.Descriptor instead.
-func (*UnfreezeAmountRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use DepositResponse.ProtoReflect.Descriptor instead.
+func (*DepositResponse) Descriptor() ([]byte, []int) {
 	return file_user_v1_user_proto_rawDescGZIP(), []int{11}
 }
 
-func (x *UnfreezeAmountRequest) GetUserId() int64 {
+func (x *DepositResponse) GetBalance() *Balance {
 	if x != nil {
-		return x.UserId
+		return x.Balance
 	}
-	return 0
+	return nil
 }
 
-func (x *UnfreezeAmountRequest) GetAmount() string {
-	if x != nil {
-		return x.Amount
-	}
-	return ""
+type FreezeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        int64                  `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Asset         string                 `protobuf:"bytes,2,opt,name=asset,proto3" json:"asset,omitempty"`
+	Amount        string                 `protobuf:"bytes,3,opt,name=amount,proto3" json:"amount,omitempty"`
+	OrderId       string                 `protobuf:"bytes,4,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
-func (x *UnfreezeAmountRequest) GetOrderId() string {
-	if x != nil {
-		return x.OrderId
-	}
-	return ""
-}
-
-// 解冻余额响应
-type UnfreezeAmountResponse struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	Success             bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	NewAvailableBalance string                 `protobuf:"bytes,2,opt,name=new_available_balance,json=newAvailableBalance,proto3" json:"new_available_balance,omitempty"`
-	NewFrozenBalance    string                 `protobuf:"bytes,3,opt,name=new_frozen_balance,json=newFrozenBalance,proto3" json:"new_frozen_balance,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
-}
-
-func (x *UnfreezeAmountResponse) Reset() {
-	*x = UnfreezeAmountResponse{}
+func (x *FreezeRequest) Reset() {
+	*x = FreezeRequest{}
 	mi := &file_user_v1_user_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *UnfreezeAmountResponse) String() string {
+func (x *FreezeRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*UnfreezeAmountResponse) ProtoMessage() {}
+func (*FreezeRequest) ProtoMessage() {}
 
-func (x *UnfreezeAmountResponse) ProtoReflect() protoreflect.Message {
+func (x *FreezeRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_user_v1_user_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -773,117 +697,63 @@ func (x *UnfreezeAmountResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use UnfreezeAmountResponse.ProtoReflect.Descriptor instead.
-func (*UnfreezeAmountResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use FreezeRequest.ProtoReflect.Descriptor instead.
+func (*FreezeRequest) Descriptor() ([]byte, []int) {
 	return file_user_v1_user_proto_rawDescGZIP(), []int{12}
 }
 
-func (x *UnfreezeAmountResponse) GetSuccess() bool {
-	if x != nil {
-		return x.Success
-	}
-	return false
-}
-
-func (x *UnfreezeAmountResponse) GetNewAvailableBalance() string {
-	if x != nil {
-		return x.NewAvailableBalance
-	}
-	return ""
-}
-
-func (x *UnfreezeAmountResponse) GetNewFrozenBalance() string {
-	if x != nil {
-		return x.NewFrozenBalance
-	}
-	return ""
-}
-
-// 扣减余额请求（用于撮合成交）
-type DeductAmountRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	UserId        int64                  `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	Amount        string                 `protobuf:"bytes,2,opt,name=amount,proto3" json:"amount,omitempty"`                  // 扣减金额
-	OrderId       string                 `protobuf:"bytes,3,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"` // 关联订单ID
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DeductAmountRequest) Reset() {
-	*x = DeductAmountRequest{}
-	mi := &file_user_v1_user_proto_msgTypes[13]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DeductAmountRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DeductAmountRequest) ProtoMessage() {}
-
-func (x *DeductAmountRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_user_v1_user_proto_msgTypes[13]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DeductAmountRequest.ProtoReflect.Descriptor instead.
-func (*DeductAmountRequest) Descriptor() ([]byte, []int) {
-	return file_user_v1_user_proto_rawDescGZIP(), []int{13}
-}
-
-func (x *DeductAmountRequest) GetUserId() int64 {
+func (x *FreezeRequest) GetUserId() int64 {
 	if x != nil {
 		return x.UserId
 	}
 	return 0
 }
 
-func (x *DeductAmountRequest) GetAmount() string {
+func (x *FreezeRequest) GetAsset() string {
+	if x != nil {
+		return x.Asset
+	}
+	return ""
+}
+
+func (x *FreezeRequest) GetAmount() string {
 	if x != nil {
 		return x.Amount
 	}
 	return ""
 }
 
-func (x *DeductAmountRequest) GetOrderId() string {
+func (x *FreezeRequest) GetOrderId() string {
 	if x != nil {
 		return x.OrderId
 	}
 	return ""
 }
 
-// 扣减余额响应
-type DeductAmountResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	NewBalance    string                 `protobuf:"bytes,2,opt,name=new_balance,json=newBalance,proto3" json:"new_balance,omitempty"`
+type FreezeResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Ok    bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	// ok=false 时为 "insufficient_balance"。
+	Reason        string `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *DeductAmountResponse) Reset() {
-	*x = DeductAmountResponse{}
-	mi := &file_user_v1_user_proto_msgTypes[14]
+func (x *FreezeResponse) Reset() {
+	*x = FreezeResponse{}
+	mi := &file_user_v1_user_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *DeductAmountResponse) String() string {
+func (x *FreezeResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*DeductAmountResponse) ProtoMessage() {}
+func (*FreezeResponse) ProtoMessage() {}
 
-func (x *DeductAmountResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_user_v1_user_proto_msgTypes[14]
+func (x *FreezeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_user_v1_user_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -894,50 +764,50 @@ func (x *DeductAmountResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use DeductAmountResponse.ProtoReflect.Descriptor instead.
-func (*DeductAmountResponse) Descriptor() ([]byte, []int) {
-	return file_user_v1_user_proto_rawDescGZIP(), []int{14}
+// Deprecated: Use FreezeResponse.ProtoReflect.Descriptor instead.
+func (*FreezeResponse) Descriptor() ([]byte, []int) {
+	return file_user_v1_user_proto_rawDescGZIP(), []int{13}
 }
 
-func (x *DeductAmountResponse) GetSuccess() bool {
+func (x *FreezeResponse) GetOk() bool {
 	if x != nil {
-		return x.Success
+		return x.Ok
 	}
 	return false
 }
 
-func (x *DeductAmountResponse) GetNewBalance() string {
+func (x *FreezeResponse) GetReason() string {
 	if x != nil {
-		return x.NewBalance
+		return x.Reason
 	}
 	return ""
 }
 
-// 增加余额请求
-type AddAmountRequest struct {
+type UnfreezeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	UserId        int64                  `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	Amount        string                 `protobuf:"bytes,2,opt,name=amount,proto3" json:"amount,omitempty"`                  // 增加金额
-	TradeId       string                 `protobuf:"bytes,3,opt,name=trade_id,json=tradeId,proto3" json:"trade_id,omitempty"` // 关联交易ID
+	Asset         string                 `protobuf:"bytes,2,opt,name=asset,proto3" json:"asset,omitempty"`
+	Amount        string                 `protobuf:"bytes,3,opt,name=amount,proto3" json:"amount,omitempty"`
+	OrderId       string                 `protobuf:"bytes,4,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *AddAmountRequest) Reset() {
-	*x = AddAmountRequest{}
-	mi := &file_user_v1_user_proto_msgTypes[15]
+func (x *UnfreezeRequest) Reset() {
+	*x = UnfreezeRequest{}
+	mi := &file_user_v1_user_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *AddAmountRequest) String() string {
+func (x *UnfreezeRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*AddAmountRequest) ProtoMessage() {}
+func (*UnfreezeRequest) ProtoMessage() {}
 
-func (x *AddAmountRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_user_v1_user_proto_msgTypes[15]
+func (x *UnfreezeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_user_v1_user_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -948,56 +818,196 @@ func (x *AddAmountRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use AddAmountRequest.ProtoReflect.Descriptor instead.
-func (*AddAmountRequest) Descriptor() ([]byte, []int) {
-	return file_user_v1_user_proto_rawDescGZIP(), []int{15}
+// Deprecated: Use UnfreezeRequest.ProtoReflect.Descriptor instead.
+func (*UnfreezeRequest) Descriptor() ([]byte, []int) {
+	return file_user_v1_user_proto_rawDescGZIP(), []int{14}
 }
 
-func (x *AddAmountRequest) GetUserId() int64 {
+func (x *UnfreezeRequest) GetUserId() int64 {
 	if x != nil {
 		return x.UserId
 	}
 	return 0
 }
 
-func (x *AddAmountRequest) GetAmount() string {
+func (x *UnfreezeRequest) GetAsset() string {
+	if x != nil {
+		return x.Asset
+	}
+	return ""
+}
+
+func (x *UnfreezeRequest) GetAmount() string {
 	if x != nil {
 		return x.Amount
 	}
 	return ""
 }
 
-func (x *AddAmountRequest) GetTradeId() string {
+func (x *UnfreezeRequest) GetOrderId() string {
+	if x != nil {
+		return x.OrderId
+	}
+	return ""
+}
+
+type UnfreezeResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnfreezeResponse) Reset() {
+	*x = UnfreezeResponse{}
+	mi := &file_user_v1_user_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnfreezeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnfreezeResponse) ProtoMessage() {}
+
+func (x *UnfreezeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_user_v1_user_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnfreezeResponse.ProtoReflect.Descriptor instead.
+func (*UnfreezeResponse) Descriptor() ([]byte, []int) {
+	return file_user_v1_user_proto_rawDescGZIP(), []int{15}
+}
+
+type SettleTradeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TradeId       string                 `protobuf:"bytes,1,opt,name=trade_id,json=tradeId,proto3" json:"trade_id,omitempty"`
+	BaseAsset     string                 `protobuf:"bytes,2,opt,name=base_asset,json=baseAsset,proto3" json:"base_asset,omitempty"`
+	QuoteAsset    string                 `protobuf:"bytes,3,opt,name=quote_asset,json=quoteAsset,proto3" json:"quote_asset,omitempty"`
+	BuyUserId     int64                  `protobuf:"varint,4,opt,name=buy_user_id,json=buyUserId,proto3" json:"buy_user_id,omitempty"`
+	SellUserId    int64                  `protobuf:"varint,5,opt,name=sell_user_id,json=sellUserId,proto3" json:"sell_user_id,omitempty"`
+	Price         string                 `protobuf:"bytes,6,opt,name=price,proto3" json:"price,omitempty"`
+	Quantity      string                 `protobuf:"bytes,7,opt,name=quantity,proto3" json:"quantity,omitempty"`
+	BuyOrderPrice string                 `protobuf:"bytes,8,opt,name=buy_order_price,json=buyOrderPrice,proto3" json:"buy_order_price,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SettleTradeRequest) Reset() {
+	*x = SettleTradeRequest{}
+	mi := &file_user_v1_user_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SettleTradeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SettleTradeRequest) ProtoMessage() {}
+
+func (x *SettleTradeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_user_v1_user_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SettleTradeRequest.ProtoReflect.Descriptor instead.
+func (*SettleTradeRequest) Descriptor() ([]byte, []int) {
+	return file_user_v1_user_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *SettleTradeRequest) GetTradeId() string {
 	if x != nil {
 		return x.TradeId
 	}
 	return ""
 }
 
-// 增加余额响应
-type AddAmountResponse struct {
+func (x *SettleTradeRequest) GetBaseAsset() string {
+	if x != nil {
+		return x.BaseAsset
+	}
+	return ""
+}
+
+func (x *SettleTradeRequest) GetQuoteAsset() string {
+	if x != nil {
+		return x.QuoteAsset
+	}
+	return ""
+}
+
+func (x *SettleTradeRequest) GetBuyUserId() int64 {
+	if x != nil {
+		return x.BuyUserId
+	}
+	return 0
+}
+
+func (x *SettleTradeRequest) GetSellUserId() int64 {
+	if x != nil {
+		return x.SellUserId
+	}
+	return 0
+}
+
+func (x *SettleTradeRequest) GetPrice() string {
+	if x != nil {
+		return x.Price
+	}
+	return ""
+}
+
+func (x *SettleTradeRequest) GetQuantity() string {
+	if x != nil {
+		return x.Quantity
+	}
+	return ""
+}
+
+func (x *SettleTradeRequest) GetBuyOrderPrice() string {
+	if x != nil {
+		return x.BuyOrderPrice
+	}
+	return ""
+}
+
+type SettleTradeResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	NewBalance    string                 `protobuf:"bytes,2,opt,name=new_balance,json=newBalance,proto3" json:"new_balance,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *AddAmountResponse) Reset() {
-	*x = AddAmountResponse{}
-	mi := &file_user_v1_user_proto_msgTypes[16]
+func (x *SettleTradeResponse) Reset() {
+	*x = SettleTradeResponse{}
+	mi := &file_user_v1_user_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *AddAmountResponse) String() string {
+func (x *SettleTradeResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*AddAmountResponse) ProtoMessage() {}
+func (*SettleTradeResponse) ProtoMessage() {}
 
-func (x *AddAmountResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_user_v1_user_proto_msgTypes[16]
+func (x *SettleTradeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_user_v1_user_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1008,44 +1018,28 @@ func (x *AddAmountResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use AddAmountResponse.ProtoReflect.Descriptor instead.
-func (*AddAmountResponse) Descriptor() ([]byte, []int) {
-	return file_user_v1_user_proto_rawDescGZIP(), []int{16}
-}
-
-func (x *AddAmountResponse) GetSuccess() bool {
-	if x != nil {
-		return x.Success
-	}
-	return false
-}
-
-func (x *AddAmountResponse) GetNewBalance() string {
-	if x != nil {
-		return x.NewBalance
-	}
-	return ""
+// Deprecated: Use SettleTradeResponse.ProtoReflect.Descriptor instead.
+func (*SettleTradeResponse) Descriptor() ([]byte, []int) {
+	return file_user_v1_user_proto_rawDescGZIP(), []int{17}
 }
 
 var File_user_v1_user_proto protoreflect.FileDescriptor
 
 const file_user_v1_user_proto_rawDesc = "" +
 	"\n" +
-	"\x12user/v1/user.proto\x12\auser.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x97\x02\n" +
+	"\x12user/v1/user.proto\x12\auser.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x9b\x01\n" +
 	"\x04User\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x1a\n" +
 	"\busername\x18\x02 \x01(\tR\busername\x12\x14\n" +
-	"\x05email\x18\x03 \x01(\tR\x05email\x12\x18\n" +
-	"\abalance\x18\x04 \x01(\tR\abalance\x12%\n" +
-	"\x0efrozen_balance\x18\x05 \x01(\tR\rfrozenBalance\x12\x16\n" +
-	"\x06status\x18\x06 \x01(\x05R\x06status\x129\n" +
+	"\x05email\x18\x03 \x01(\tR\x05email\x12\x16\n" +
+	"\x06status\x18\x04 \x01(\x05R\x06status\x129\n" +
 	"\n" +
-	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
-	"\n" +
-	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\")\n" +
-	"\x0eGetUserRequest\x12\x17\n" +
-	"\auser_id\x18\x01 \x01(\x03R\x06userId\"4\n" +
-	"\x0fGetUserResponse\x12!\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"a\n" +
+	"\x11CreateUserRequest\x12\x1a\n" +
+	"\busername\x18\x01 \x01(\tR\busername\x12\x1a\n" +
+	"\bpassword\x18\x02 \x01(\tR\bpassword\x12\x14\n" +
+	"\x05email\x18\x03 \x01(\tR\x05email\"7\n" +
+	"\x12CreateUserResponse\x12!\n" +
 	"\x04user\x18\x01 \x01(\v2\r.user.v1.UserR\x04user\"F\n" +
 	"\fLoginRequest\x12\x1a\n" +
 	"\busername\x18\x01 \x01(\tR\busername\x12\x1a\n" +
@@ -1053,64 +1047,63 @@ const file_user_v1_user_proto_rawDesc = "" +
 	"\rLoginResponse\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\x03R\x06userId\x12\x1a\n" +
 	"\busername\x18\x02 \x01(\tR\busername\x12\x12\n" +
-	"\x04role\x18\x03 \x01(\tR\x04role\"\x8a\x01\n" +
-	"\x11CreateUserRequest\x12\x1a\n" +
-	"\busername\x18\x01 \x01(\tR\busername\x12\x1a\n" +
-	"\bpassword\x18\x02 \x01(\tR\bpassword\x12\x14\n" +
-	"\x05email\x18\x03 \x01(\tR\x05email\x12'\n" +
-	"\x0finitial_balance\x18\x04 \x01(\tR\x0einitialBalance\"7\n" +
-	"\x12CreateUserResponse\x12!\n" +
-	"\x04user\x18\x01 \x01(\v2\r.user.v1.UserR\x04user\",\n" +
-	"\x11GetBalanceRequest\x12\x17\n" +
-	"\auser_id\x18\x01 \x01(\x03R\x06userId\"\xa6\x01\n" +
-	"\x12GetBalanceResponse\x12\x17\n" +
-	"\auser_id\x18\x01 \x01(\x03R\x06userId\x12+\n" +
-	"\x11available_balance\x18\x02 \x01(\tR\x10availableBalance\x12%\n" +
-	"\x0efrozen_balance\x18\x03 \x01(\tR\rfrozenBalance\x12#\n" +
-	"\rtotal_balance\x18\x04 \x01(\tR\ftotalBalance\"a\n" +
-	"\x13FreezeAmountRequest\x12\x17\n" +
-	"\auser_id\x18\x01 \x01(\x03R\x06userId\x12\x16\n" +
-	"\x06amount\x18\x02 \x01(\tR\x06amount\x12\x19\n" +
-	"\border_id\x18\x03 \x01(\tR\aorderId\"\x92\x01\n" +
-	"\x14FreezeAmountResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\x122\n" +
-	"\x15new_available_balance\x18\x02 \x01(\tR\x13newAvailableBalance\x12,\n" +
-	"\x12new_frozen_balance\x18\x03 \x01(\tR\x10newFrozenBalance\"c\n" +
-	"\x15UnfreezeAmountRequest\x12\x17\n" +
-	"\auser_id\x18\x01 \x01(\x03R\x06userId\x12\x16\n" +
-	"\x06amount\x18\x02 \x01(\tR\x06amount\x12\x19\n" +
-	"\border_id\x18\x03 \x01(\tR\aorderId\"\x94\x01\n" +
-	"\x16UnfreezeAmountResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\x122\n" +
-	"\x15new_available_balance\x18\x02 \x01(\tR\x13newAvailableBalance\x12,\n" +
-	"\x12new_frozen_balance\x18\x03 \x01(\tR\x10newFrozenBalance\"a\n" +
-	"\x13DeductAmountRequest\x12\x17\n" +
-	"\auser_id\x18\x01 \x01(\x03R\x06userId\x12\x16\n" +
-	"\x06amount\x18\x02 \x01(\tR\x06amount\x12\x19\n" +
-	"\border_id\x18\x03 \x01(\tR\aorderId\"Q\n" +
-	"\x14DeductAmountResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x1f\n" +
-	"\vnew_balance\x18\x02 \x01(\tR\n" +
-	"newBalance\"^\n" +
-	"\x10AddAmountRequest\x12\x17\n" +
-	"\auser_id\x18\x01 \x01(\x03R\x06userId\x12\x16\n" +
-	"\x06amount\x18\x02 \x01(\tR\x06amount\x12\x19\n" +
-	"\btrade_id\x18\x03 \x01(\tR\atradeId\"N\n" +
-	"\x11AddAmountResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x1f\n" +
-	"\vnew_balance\x18\x02 \x01(\tR\n" +
-	"newBalance2\xc2\x04\n" +
-	"\vUserService\x12<\n" +
-	"\aGetUser\x12\x17.user.v1.GetUserRequest\x1a\x18.user.v1.GetUserResponse\x126\n" +
-	"\x05Login\x12\x15.user.v1.LoginRequest\x1a\x16.user.v1.LoginResponse\x12E\n" +
+	"\x04role\x18\x03 \x01(\tR\x04role\")\n" +
+	"\x0eGetUserRequest\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\x03R\x06userId\"4\n" +
+	"\x0fGetUserResponse\x12!\n" +
+	"\x04user\x18\x01 \x01(\v2\r.user.v1.UserR\x04user\"U\n" +
+	"\aBalance\x12\x14\n" +
+	"\x05asset\x18\x01 \x01(\tR\x05asset\x12\x1c\n" +
+	"\tavailable\x18\x02 \x01(\tR\tavailable\x12\x16\n" +
+	"\x06frozen\x18\x03 \x01(\tR\x06frozen\"-\n" +
+	"\x12GetBalancesRequest\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\x03R\x06userId\"C\n" +
+	"\x13GetBalancesResponse\x12,\n" +
+	"\bbalances\x18\x01 \x03(\v2\x10.user.v1.BalanceR\bbalances\"n\n" +
+	"\x0eDepositRequest\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\x03R\x06userId\x12\x14\n" +
+	"\x05asset\x18\x02 \x01(\tR\x05asset\x12\x16\n" +
+	"\x06amount\x18\x03 \x01(\tR\x06amount\x12\x15\n" +
+	"\x06ref_id\x18\x04 \x01(\tR\x05refId\"=\n" +
+	"\x0fDepositResponse\x12*\n" +
+	"\abalance\x18\x01 \x01(\v2\x10.user.v1.BalanceR\abalance\"q\n" +
+	"\rFreezeRequest\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\x03R\x06userId\x12\x14\n" +
+	"\x05asset\x18\x02 \x01(\tR\x05asset\x12\x16\n" +
+	"\x06amount\x18\x03 \x01(\tR\x06amount\x12\x19\n" +
+	"\border_id\x18\x04 \x01(\tR\aorderId\"8\n" +
+	"\x0eFreezeResponse\x12\x0e\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"s\n" +
+	"\x0fUnfreezeRequest\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\x03R\x06userId\x12\x14\n" +
+	"\x05asset\x18\x02 \x01(\tR\x05asset\x12\x16\n" +
+	"\x06amount\x18\x03 \x01(\tR\x06amount\x12\x19\n" +
+	"\border_id\x18\x04 \x01(\tR\aorderId\"\x12\n" +
+	"\x10UnfreezeResponse\"\x8b\x02\n" +
+	"\x12SettleTradeRequest\x12\x19\n" +
+	"\btrade_id\x18\x01 \x01(\tR\atradeId\x12\x1d\n" +
 	"\n" +
-	"CreateUser\x12\x1a.user.v1.CreateUserRequest\x1a\x1b.user.v1.CreateUserResponse\x12E\n" +
+	"base_asset\x18\x02 \x01(\tR\tbaseAsset\x12\x1f\n" +
+	"\vquote_asset\x18\x03 \x01(\tR\n" +
+	"quoteAsset\x12\x1e\n" +
+	"\vbuy_user_id\x18\x04 \x01(\x03R\tbuyUserId\x12 \n" +
+	"\fsell_user_id\x18\x05 \x01(\x03R\n" +
+	"sellUserId\x12\x14\n" +
+	"\x05price\x18\x06 \x01(\tR\x05price\x12\x1a\n" +
+	"\bquantity\x18\a \x01(\tR\bquantity\x12&\n" +
+	"\x0fbuy_order_price\x18\b \x01(\tR\rbuyOrderPrice\"\x15\n" +
+	"\x13SettleTradeResponse2\x98\x04\n" +
+	"\vUserService\x12E\n" +
 	"\n" +
-	"GetBalance\x12\x1a.user.v1.GetBalanceRequest\x1a\x1b.user.v1.GetBalanceResponse\x12K\n" +
-	"\fFreezeAmount\x12\x1c.user.v1.FreezeAmountRequest\x1a\x1d.user.v1.FreezeAmountResponse\x12Q\n" +
-	"\x0eUnfreezeAmount\x12\x1e.user.v1.UnfreezeAmountRequest\x1a\x1f.user.v1.UnfreezeAmountResponse\x12K\n" +
-	"\fDeductAmount\x12\x1c.user.v1.DeductAmountRequest\x1a\x1d.user.v1.DeductAmountResponse\x12B\n" +
-	"\tAddAmount\x12\x19.user.v1.AddAmountRequest\x1a\x1a.user.v1.AddAmountResponseB?Z=github.com/linxun2025/exchange-project/api/gen/user/v1;userpbb\x06proto3"
+	"CreateUser\x12\x1a.user.v1.CreateUserRequest\x1a\x1b.user.v1.CreateUserResponse\x126\n" +
+	"\x05Login\x12\x15.user.v1.LoginRequest\x1a\x16.user.v1.LoginResponse\x12<\n" +
+	"\aGetUser\x12\x17.user.v1.GetUserRequest\x1a\x18.user.v1.GetUserResponse\x12H\n" +
+	"\vGetBalances\x12\x1b.user.v1.GetBalancesRequest\x1a\x1c.user.v1.GetBalancesResponse\x12<\n" +
+	"\aDeposit\x12\x17.user.v1.DepositRequest\x1a\x18.user.v1.DepositResponse\x129\n" +
+	"\x06Freeze\x12\x16.user.v1.FreezeRequest\x1a\x17.user.v1.FreezeResponse\x12?\n" +
+	"\bUnfreeze\x12\x18.user.v1.UnfreezeRequest\x1a\x19.user.v1.UnfreezeResponse\x12H\n" +
+	"\vSettleTrade\x12\x1b.user.v1.SettleTradeRequest\x1a\x1c.user.v1.SettleTradeResponseB?Z=github.com/linxun2025/exchange-project/api/gen/user/v1;userpbb\x06proto3"
 
 var (
 	file_user_v1_user_proto_rawDescOnce sync.Once
@@ -1124,53 +1117,55 @@ func file_user_v1_user_proto_rawDescGZIP() []byte {
 	return file_user_v1_user_proto_rawDescData
 }
 
-var file_user_v1_user_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_user_v1_user_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_user_v1_user_proto_goTypes = []any{
-	(*User)(nil),                   // 0: user.v1.User
-	(*GetUserRequest)(nil),         // 1: user.v1.GetUserRequest
-	(*GetUserResponse)(nil),        // 2: user.v1.GetUserResponse
-	(*LoginRequest)(nil),           // 3: user.v1.LoginRequest
-	(*LoginResponse)(nil),          // 4: user.v1.LoginResponse
-	(*CreateUserRequest)(nil),      // 5: user.v1.CreateUserRequest
-	(*CreateUserResponse)(nil),     // 6: user.v1.CreateUserResponse
-	(*GetBalanceRequest)(nil),      // 7: user.v1.GetBalanceRequest
-	(*GetBalanceResponse)(nil),     // 8: user.v1.GetBalanceResponse
-	(*FreezeAmountRequest)(nil),    // 9: user.v1.FreezeAmountRequest
-	(*FreezeAmountResponse)(nil),   // 10: user.v1.FreezeAmountResponse
-	(*UnfreezeAmountRequest)(nil),  // 11: user.v1.UnfreezeAmountRequest
-	(*UnfreezeAmountResponse)(nil), // 12: user.v1.UnfreezeAmountResponse
-	(*DeductAmountRequest)(nil),    // 13: user.v1.DeductAmountRequest
-	(*DeductAmountResponse)(nil),   // 14: user.v1.DeductAmountResponse
-	(*AddAmountRequest)(nil),       // 15: user.v1.AddAmountRequest
-	(*AddAmountResponse)(nil),      // 16: user.v1.AddAmountResponse
-	(*timestamppb.Timestamp)(nil),  // 17: google.protobuf.Timestamp
+	(*User)(nil),                  // 0: user.v1.User
+	(*CreateUserRequest)(nil),     // 1: user.v1.CreateUserRequest
+	(*CreateUserResponse)(nil),    // 2: user.v1.CreateUserResponse
+	(*LoginRequest)(nil),          // 3: user.v1.LoginRequest
+	(*LoginResponse)(nil),         // 4: user.v1.LoginResponse
+	(*GetUserRequest)(nil),        // 5: user.v1.GetUserRequest
+	(*GetUserResponse)(nil),       // 6: user.v1.GetUserResponse
+	(*Balance)(nil),               // 7: user.v1.Balance
+	(*GetBalancesRequest)(nil),    // 8: user.v1.GetBalancesRequest
+	(*GetBalancesResponse)(nil),   // 9: user.v1.GetBalancesResponse
+	(*DepositRequest)(nil),        // 10: user.v1.DepositRequest
+	(*DepositResponse)(nil),       // 11: user.v1.DepositResponse
+	(*FreezeRequest)(nil),         // 12: user.v1.FreezeRequest
+	(*FreezeResponse)(nil),        // 13: user.v1.FreezeResponse
+	(*UnfreezeRequest)(nil),       // 14: user.v1.UnfreezeRequest
+	(*UnfreezeResponse)(nil),      // 15: user.v1.UnfreezeResponse
+	(*SettleTradeRequest)(nil),    // 16: user.v1.SettleTradeRequest
+	(*SettleTradeResponse)(nil),   // 17: user.v1.SettleTradeResponse
+	(*timestamppb.Timestamp)(nil), // 18: google.protobuf.Timestamp
 }
 var file_user_v1_user_proto_depIdxs = []int32{
-	17, // 0: user.v1.User.created_at:type_name -> google.protobuf.Timestamp
-	17, // 1: user.v1.User.updated_at:type_name -> google.protobuf.Timestamp
+	18, // 0: user.v1.User.created_at:type_name -> google.protobuf.Timestamp
+	0,  // 1: user.v1.CreateUserResponse.user:type_name -> user.v1.User
 	0,  // 2: user.v1.GetUserResponse.user:type_name -> user.v1.User
-	0,  // 3: user.v1.CreateUserResponse.user:type_name -> user.v1.User
-	1,  // 4: user.v1.UserService.GetUser:input_type -> user.v1.GetUserRequest
-	3,  // 5: user.v1.UserService.Login:input_type -> user.v1.LoginRequest
-	5,  // 6: user.v1.UserService.CreateUser:input_type -> user.v1.CreateUserRequest
-	7,  // 7: user.v1.UserService.GetBalance:input_type -> user.v1.GetBalanceRequest
-	9,  // 8: user.v1.UserService.FreezeAmount:input_type -> user.v1.FreezeAmountRequest
-	11, // 9: user.v1.UserService.UnfreezeAmount:input_type -> user.v1.UnfreezeAmountRequest
-	13, // 10: user.v1.UserService.DeductAmount:input_type -> user.v1.DeductAmountRequest
-	15, // 11: user.v1.UserService.AddAmount:input_type -> user.v1.AddAmountRequest
-	2,  // 12: user.v1.UserService.GetUser:output_type -> user.v1.GetUserResponse
-	4,  // 13: user.v1.UserService.Login:output_type -> user.v1.LoginResponse
-	6,  // 14: user.v1.UserService.CreateUser:output_type -> user.v1.CreateUserResponse
-	8,  // 15: user.v1.UserService.GetBalance:output_type -> user.v1.GetBalanceResponse
-	10, // 16: user.v1.UserService.FreezeAmount:output_type -> user.v1.FreezeAmountResponse
-	12, // 17: user.v1.UserService.UnfreezeAmount:output_type -> user.v1.UnfreezeAmountResponse
-	14, // 18: user.v1.UserService.DeductAmount:output_type -> user.v1.DeductAmountResponse
-	16, // 19: user.v1.UserService.AddAmount:output_type -> user.v1.AddAmountResponse
-	12, // [12:20] is the sub-list for method output_type
-	4,  // [4:12] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	7,  // 3: user.v1.GetBalancesResponse.balances:type_name -> user.v1.Balance
+	7,  // 4: user.v1.DepositResponse.balance:type_name -> user.v1.Balance
+	1,  // 5: user.v1.UserService.CreateUser:input_type -> user.v1.CreateUserRequest
+	3,  // 6: user.v1.UserService.Login:input_type -> user.v1.LoginRequest
+	5,  // 7: user.v1.UserService.GetUser:input_type -> user.v1.GetUserRequest
+	8,  // 8: user.v1.UserService.GetBalances:input_type -> user.v1.GetBalancesRequest
+	10, // 9: user.v1.UserService.Deposit:input_type -> user.v1.DepositRequest
+	12, // 10: user.v1.UserService.Freeze:input_type -> user.v1.FreezeRequest
+	14, // 11: user.v1.UserService.Unfreeze:input_type -> user.v1.UnfreezeRequest
+	16, // 12: user.v1.UserService.SettleTrade:input_type -> user.v1.SettleTradeRequest
+	2,  // 13: user.v1.UserService.CreateUser:output_type -> user.v1.CreateUserResponse
+	4,  // 14: user.v1.UserService.Login:output_type -> user.v1.LoginResponse
+	6,  // 15: user.v1.UserService.GetUser:output_type -> user.v1.GetUserResponse
+	9,  // 16: user.v1.UserService.GetBalances:output_type -> user.v1.GetBalancesResponse
+	11, // 17: user.v1.UserService.Deposit:output_type -> user.v1.DepositResponse
+	13, // 18: user.v1.UserService.Freeze:output_type -> user.v1.FreezeResponse
+	15, // 19: user.v1.UserService.Unfreeze:output_type -> user.v1.UnfreezeResponse
+	17, // 20: user.v1.UserService.SettleTrade:output_type -> user.v1.SettleTradeResponse
+	13, // [13:21] is the sub-list for method output_type
+	5,  // [5:13] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_user_v1_user_proto_init() }
@@ -1184,7 +1179,7 @@ func file_user_v1_user_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_user_v1_user_proto_rawDesc), len(file_user_v1_user_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   17,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

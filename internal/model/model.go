@@ -1,51 +1,72 @@
-// Package model 定义数据库模型
+// Package model 定义数据库模型。
 package model
 
 import (
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
-// User 用户模型
 type User struct {
-	ID            int64     `gorm:"primaryKey;autoIncrement" json:"id"`
-	Username      string    `gorm:"type:varchar(64);uniqueIndex;not null" json:"username"`
-	PasswordHash  string    `gorm:"type:varchar(255);not null" json:"-"`
-	Email         string    `gorm:"type:varchar(128)" json:"email"`
-	Balance       float64   `gorm:"type:decimal(20,8);default:0;not null" json:"balance"`
-	FrozenBalance float64   `gorm:"type:decimal(20,8);default:0;not null" json:"frozen_balance"`
-	Status        int       `gorm:"type:tinyint;default:1;not null" json:"status"`
-	CreatedAt     time.Time `gorm:"autoCreateTime" json:"created_at"`
-	UpdatedAt     time.Time `gorm:"autoUpdateTime" json:"updated_at"`
-	Roles         []Role    `gorm:"many2many:user_roles;" json:"roles,omitempty"`
+	ID           int64     `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username     string    `gorm:"type:varchar(64);uniqueIndex;not null" json:"username"`
+	PasswordHash string    `gorm:"type:varchar(255);not null" json:"-"`
+	Email        string    `gorm:"type:varchar(128)" json:"email"`
+	Status       int       `gorm:"type:tinyint;default:1;not null" json:"status"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	Roles        []Role    `gorm:"many2many:user_roles" json:"roles,omitempty"`
 }
 
-func (User) TableName() string {
-	return "users"
+func (User) TableName() string { return "users" }
+
+type Balance struct {
+	UserID    int64           `gorm:"primaryKey;autoIncrement:false"`
+	Asset     string          `gorm:"primaryKey;type:varchar(16)"`
+	Available decimal.Decimal `gorm:"type:decimal(36,18)"`
+	Frozen    decimal.Decimal `gorm:"type:decimal(36,18)"`
+	UpdatedAt time.Time
 }
 
-// Order 订单模型
+func (Balance) TableName() string { return "balances" }
+
+type LedgerEntry struct {
+	ID             int64  `gorm:"primaryKey;autoIncrement"`
+	RefType        string `gorm:"type:varchar(16)"`
+	RefID          string `gorm:"type:varchar(96)"`
+	Leg            int    `gorm:"type:tinyint"`
+	UserID         int64
+	Asset          string          `gorm:"type:varchar(16)"`
+	DeltaAvailable decimal.Decimal `gorm:"type:decimal(36,18)"`
+	DeltaFrozen    decimal.Decimal `gorm:"type:decimal(36,18)"`
+	CreatedAt      time.Time
+}
+
+func (LedgerEntry) TableName() string { return "ledger_entries" }
+
 type Order struct {
-	ID              int64     `gorm:"primaryKey;autoIncrement" json:"id"`
-	OrderID        string    `gorm:"type:varchar(64);uniqueIndex;not null" json:"order_id"`
-	IdempotencyKey string    `gorm:"type:varchar(128);uniqueIndex" json:"idempotency_key,omitempty"`
-	UserID         int64     `gorm:"index;not null" json:"user_id"`
-	Symbol         string    `gorm:"type:varchar(32);not null;index" json:"symbol"`
-	Side           string    `gorm:"type:enum('buy','sell');not null" json:"side"`
-	OrderType      string    `gorm:"type:enum('limit','market','ioc','fok');default:'limit';not null" json:"order_type"`
-	Price          float64   `gorm:"type:decimal(20,8);not null" json:"price"`
-	Quantity       float64   `gorm:"type:decimal(20,8);not null" json:"quantity"`
-	FilledQuantity float64   `gorm:"type:decimal(20,8);default:0;not null" json:"filled_quantity"`
-	Status         string    `gorm:"type:enum('created','frozen','pending','partial_filled','filled','cancelled','rejected','submitted','settled');default:'created';not null;index" json:"status"`
-	CreatedAt      time.Time `gorm:"autoCreateTime;index" json:"created_at"`
-	UpdatedAt      time.Time `gorm:"autoUpdateTime" json:"updated_at"`
-	User           *User     `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	ID              int64  `gorm:"primaryKey;autoIncrement"`
+	OrderID         string `gorm:"type:varchar(64)"`
+	UserID          int64
+	IdempotencyKey  string          `gorm:"type:varchar(64)"`
+	Symbol          string          `gorm:"type:varchar(32)"`
+	Side            OrderSide       `gorm:"type:enum('buy','sell')"`
+	Type            OrderType       `gorm:"column:type;type:enum('limit','market','ioc','fok')"`
+	Price           decimal.Decimal `gorm:"type:decimal(36,18)"`
+	Quantity        decimal.Decimal `gorm:"type:decimal(36,18)"`
+	FilledQuantity  decimal.Decimal `gorm:"type:decimal(36,18)"`
+	ClosedQuantity  decimal.Decimal `gorm:"type:decimal(36,18)"`
+	FrozenAsset     string          `gorm:"type:varchar(16)"`
+	FrozenAmount    decimal.Decimal `gorm:"type:decimal(36,18)"`
+	Status          OrderStatus     `gorm:"type:enum('pending','open','partial_filled','filled','cancelled','rejected');default:pending"`
+	RejectReason    string          `gorm:"type:varchar(32)"`
+	CancelRequested bool
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
-func (Order) TableName() string {
-	return "orders"
-}
+func (Order) TableName() string { return "orders" }
 
-// OrderSide 订单方向
 type OrderSide string
 
 const (
@@ -53,7 +74,6 @@ const (
 	OrderSideSell OrderSide = "sell"
 )
 
-// OrderType 订单类型
 type OrderType string
 
 const (
@@ -63,130 +83,44 @@ const (
 	OrderTypeFOK    OrderType = "fok"
 )
 
-func (t OrderType) String() string {
-	switch t {
-	case OrderTypeLimit:
-		return "limit"
-	case OrderTypeMarket:
-		return "market"
-	case OrderTypeIOC:
-		return "ioc"
-	case OrderTypeFOK:
-		return "fok"
-	default:
-		return "unknown"
-	}
-}
-
-// OrderStatus 订单状态
 type OrderStatus string
 
 const (
-	OrderStatusCreated      OrderStatus = "created"      // 订单创建，等待冻结
-	OrderStatusFrozen      OrderStatus = "frozen"      // 余额已冻结，等待提交
-	OrderStatusPending     OrderStatus = "pending"     // 已提交到撮合引擎
-	OrderStatusPartialFilled OrderStatus = "partial_filled" // 部分成交
-	OrderStatusFilled      OrderStatus = "filled"      // 完全成交
-	OrderStatusCancelled   OrderStatus = "cancelled"   // 已取消
-	OrderStatusRejected    OrderStatus = "rejected"    // 被拒绝
-	OrderStatusSubmitted   OrderStatus = "submitted"   // 已提交（撮合确认）
-	OrderStatusSettled     OrderStatus = "settled"     // 已结算（资金划转完成）
+	OrderStatusPending       OrderStatus = "pending"
+	OrderStatusOpen          OrderStatus = "open"
+	OrderStatusPartialFilled OrderStatus = "partial_filled"
+	OrderStatusFilled        OrderStatus = "filled"
+	OrderStatusCancelled     OrderStatus = "cancelled"
+	OrderStatusRejected      OrderStatus = "rejected"
 )
 
-// IsFinalStatus 判断是否为终态
-func (s OrderStatus) IsFinalStatus() bool {
-	return s == OrderStatusFilled || s == OrderStatusCancelled || s == OrderStatusRejected || s == OrderStatusSettled
+// IsFinal reports whether the order can no longer be matched.
+func (s OrderStatus) IsFinal() bool {
+	return s == OrderStatusFilled || s == OrderStatusCancelled || s == OrderStatusRejected
 }
 
-// ValidTransitions 定义有效的状态转换
-var ValidTransitions = map[OrderStatus][]OrderStatus{
-	OrderStatusCreated:      {OrderStatusFrozen, OrderStatusCancelled},
-	OrderStatusFrozen:      {OrderStatusPending, OrderStatusCancelled},
-	OrderStatusPending:     {OrderStatusPartialFilled, OrderStatusFilled, OrderStatusCancelled, OrderStatusRejected},
-	OrderStatusPartialFilled: {OrderStatusFilled, OrderStatusCancelled, OrderStatusRejected},
-	OrderStatusSubmitted:    {OrderStatusPartialFilled, OrderStatusFilled, OrderStatusCancelled, OrderStatusRejected},
-	OrderStatusFilled:      {OrderStatusSettled},
-	OrderStatusSettled:     {}, // 终态，不可转换
-	OrderStatusCancelled:   {}, // 终态，不可转换
-	OrderStatusRejected:    {}, // 终态，不可转换
-}
-
-// CanTransitionTo 检查是否可以转换到目标状态
-func (s OrderStatus) CanTransitionTo(target OrderStatus) bool {
-	validTargets, ok := ValidTransitions[s]
-	if !ok {
-		return false
-	}
-	for _, t := range validTargets {
-		if t == target {
-			return true
-		}
-	}
-	return false
-}
-
-// Trade 交易记录模型
 type Trade struct {
-	ID          int64     `gorm:"primaryKey;autoIncrement" json:"id"`
-	TradeID     string    `gorm:"type:varchar(64);uniqueIndex;not null" json:"trade_id"`
-	BuyOrderID  string    `gorm:"type:varchar(64);index;not null" json:"buy_order_id"`
-	SellOrderID string    `gorm:"type:varchar(64);index;not null" json:"sell_order_id"`
-	Symbol      string    `gorm:"type:varchar(32);not null" json:"symbol"`
-	Price       float64   `gorm:"type:decimal(20,8);not null" json:"price"`
-	Quantity    float64   `gorm:"type:decimal(20,8);not null" json:"quantity"`
-	BuyUserID   int64     `gorm:"not null" json:"buy_user_id"`
-	SellUserID  int64     `gorm:"not null" json:"sell_user_id"`
-	CreatedAt   time.Time `gorm:"autoCreateTime" json:"created_at"`
+	ID          int64  `gorm:"primaryKey;autoIncrement"`
+	TradeID     string `gorm:"type:varchar(96)"`
+	Symbol      string `gorm:"type:varchar(32)"`
+	BuyOrderID  string `gorm:"type:varchar(64)"`
+	SellOrderID string `gorm:"type:varchar(64)"`
+	BuyUserID   int64
+	SellUserID  int64
+	Price       decimal.Decimal `gorm:"type:decimal(36,18)"`
+	Quantity    decimal.Decimal `gorm:"type:decimal(36,18)"`
+	TakerSide   OrderSide       `gorm:"type:enum('buy','sell')"`
+	LSN         uint64
+	CreatedAt   time.Time
 }
 
-func (Trade) TableName() string {
-	return "trades"
-}
+func (Trade) TableName() string { return "trades" }
 
-// Role 角色模型
 type Role struct {
-	ID          int64        `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name        string       `gorm:"type:varchar(64);uniqueIndex;not null" json:"name"`
-	Description string       `gorm:"type:varchar(255)" json:"description"`
-	CreatedAt  time.Time    `gorm:"autoCreateTime" json:"created_at"`
-	Permissions []Permission `gorm:"many2many:role_permissions;" json:"permissions,omitempty"`
-	Users      []User       `gorm:"many2many:user_roles;" json:"users,omitempty"`
-}
-
-func (Role) TableName() string {
-	return "roles"
-}
-
-// Permission 权限模型
-type Permission struct {
 	ID          int64     `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name        string    `gorm:"type:varchar(128);uniqueIndex;not null" json:"name"`
+	Name        string    `gorm:"type:varchar(64);uniqueIndex;not null" json:"name"`
 	Description string    `gorm:"type:varchar(255)" json:"description"`
-	CreatedAt   time.Time `gorm:"autoCreateTime" json:"created_at"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
-func (Permission) TableName() string {
-	return "permissions"
-}
-
-// UserRole 用户角色关联
-type UserRole struct {
-	UserID    int64     `gorm:"primaryKey" json:"user_id"`
-	RoleID    int64     `gorm:"primaryKey" json:"role_id"`
-	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
-}
-
-func (UserRole) TableName() string {
-	return "user_roles"
-}
-
-// RolePermission 角色权限关联
-type RolePermission struct {
-	RoleID       int64     `gorm:"primaryKey" json:"role_id"`
-	PermissionID int64     `gorm:"primaryKey" json:"permission_id"`
-	CreatedAt    time.Time `gorm:"autoCreateTime" json:"created_at"`
-}
-
-func (RolePermission) TableName() string {
-	return "role_permissions"
-}
+func (Role) TableName() string { return "roles" }

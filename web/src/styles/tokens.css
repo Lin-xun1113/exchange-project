@@ -1,0 +1,17 @@
+:root {
+  color-scheme: dark;
+  --ink-950: #0F1830;
+  --ink-900: #152040;
+  --ink-700: #263257;
+  --fog: #D6DCEB;
+  --fog-dim: #8590AE;
+  --lamp: #F4B23E;
+  --rise: #2FC48D;
+  --fall: #EE5D6C;
+  --font: 'Archivo Variable', 'PingFang SC', 'Noto Sans SC', system-ui, sans-serif;
+  background: var(--ink-950);
+  color: var(--fog);
+  font: 400 13px/1.4 var(--font);
+  font-stretch: 100%;
+  font-variant-numeric: tabular-nums;
+}

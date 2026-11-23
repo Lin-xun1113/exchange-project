@@ -5,8 +5,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
-	"github.com/linxun2025/exchange-project/pkg/metrics"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
@@ -15,31 +15,10 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
-// sdktrace.Span is the interface we need
-type metricsExporter struct {
-	delegate sdktrace.SpanExporter
-}
-
-// ExportSpans wraps the delegate exporter and records metrics
-func (e *metricsExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
-	err := e.delegate.ExportSpans(ctx, spans)
-	if err != nil {
-		metrics.GetMetrics().RecordTraceExporterExport("error")
-		return err
-	}
-	metrics.GetMetrics().RecordTraceExporterExport("success")
-	return nil
-}
-
-// Shutdown delegates to the underlying exporter
-func (e *metricsExporter) Shutdown(ctx context.Context) error {
-	return e.delegate.Shutdown(ctx)
-}
-
 // Init initializes the OpenTelemetry SDK with an OTLP gRPC exporter and a
 // ParentBased(AlwaysSample) sampler. It returns a shutdown function that must
 // be called on service exit to flush in-flight spans.
-func Init(ctx context.Context, serviceName, otlpEndpoint string) (shutdown func(context.Context) error, rerr error) {
+func Init(ctx context.Context, serviceName, otlpEndpoint string) (func(context.Context) error, error) {
 	if otlpEndpoint == "" {
 		otlpEndpoint = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 	}
@@ -47,16 +26,17 @@ func Init(ctx context.Context, serviceName, otlpEndpoint string) (shutdown func(
 		otlpEndpoint = "http://localhost:4317"
 	}
 
-	exporter, err := otlptracegrpc.New(ctx,
-		otlptracegrpc.WithEndpoint(otlpEndpoint),
-		otlptracegrpc.WithInsecure(),
-	)
+	var opts []otlptracegrpc.Option
+	if strings.Contains(otlpEndpoint, "://") {
+		opts = append(opts, otlptracegrpc.WithEndpointURL(otlpEndpoint))
+	} else {
+		// An explicit host:port targets an internal plaintext collector.
+		opts = append(opts, otlptracegrpc.WithEndpoint(otlpEndpoint), otlptracegrpc.WithInsecure())
+	}
+	exporter, err := otlptracegrpc.New(ctx, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create OTLP exporter: %w", err)
 	}
-
-	// Wrap the exporter to record metrics
-	metricsExporter := &metricsExporter{delegate: exporter}
 
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
@@ -69,7 +49,7 @@ func Init(ctx context.Context, serviceName, otlpEndpoint string) (shutdown func(
 	}
 
 	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(metricsExporter),
+		sdktrace.WithBatcher(exporter),
 		sdktrace.WithResource(res),
 		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.AlwaysSample())),
 	)
@@ -80,11 +60,5 @@ func Init(ctx context.Context, serviceName, otlpEndpoint string) (shutdown func(
 		propagation.Baggage{},
 	))
 
-	return func(ctx context.Context) error {
-		err := tp.Shutdown(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to shutdown tracer provider: %w", err)
-		}
-		return exporter.Shutdown(ctx)
-	}, nil
+	return tp.Shutdown, nil
 }

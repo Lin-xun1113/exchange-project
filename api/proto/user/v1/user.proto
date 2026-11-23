@@ -6,137 +6,110 @@ option go_package = "github.com/linxun2025/exchange-project/api/gen/user/v1;user
 
 import "google/protobuf/timestamp.proto";
 
-// 用户服务定义
 service UserService {
-    // 获取用户信息
-    rpc GetUser(GetUserRequest) returns (GetUserResponse);
-    // 用户登录
-    rpc Login(LoginRequest) returns (LoginResponse);
-    // 创建用户（注册）
-    rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
-    // 获取用户余额
-    rpc GetBalance(GetBalanceRequest) returns (GetBalanceResponse);
-    // 冻结余额
-    rpc FreezeAmount(FreezeAmountRequest) returns (FreezeAmountResponse);
-    // 解冻余额
-    rpc UnfreezeAmount(UnfreezeAmountRequest) returns (UnfreezeAmountResponse);
-    // 扣减余额（撮合成交后调用）
-    rpc DeductAmount(DeductAmountRequest) returns (DeductAmountResponse);
-    // 增加余额
-    rpc AddAmount(AddAmountRequest) returns (AddAmountResponse);
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+  rpc GetBalances(GetBalancesRequest) returns (GetBalancesResponse);
+  rpc Deposit(DepositRequest) returns (DepositResponse);
+  rpc Freeze(FreezeRequest) returns (FreezeResponse);
+  rpc Unfreeze(UnfreezeRequest) returns (UnfreezeResponse);
+  rpc SettleTrade(SettleTradeRequest) returns (SettleTradeResponse);
 }
 
-// 用户信息
 message User {
-    int64 id = 1;
-    string username = 2;
-    string email = 3;
-    string balance = 4;         // 使用 string 以避免浮点数精度问题
-    string frozen_balance = 5;
-    int32 status = 6;
-    google.protobuf.Timestamp created_at = 7;
-    google.protobuf.Timestamp updated_at = 8;
+  int64 id = 1;
+  string username = 2;
+  string email = 3;
+  int32 status = 4;
+  google.protobuf.Timestamp created_at = 5;
 }
 
-// 获取用户请求
-message GetUserRequest {
-    int64 user_id = 1;
-}
-
-// 获取用户响应
-message GetUserResponse {
-    User user = 1;
-}
-
-// 登录请求
-message LoginRequest {
-    string username = 1;
-    string password = 2;
-}
-
-// 登录响应
-message LoginResponse {
-    int64 user_id = 1;
-    string username = 2;
-    string role = 3;
-}
-
-// 创建用户请求
 message CreateUserRequest {
-    string username = 1;
-    string password = 2;
-    string email = 3;
-    string initial_balance = 4;  // 初始余额，string 类型
+  string username = 1;
+  string password = 2;
+  string email = 3;
 }
 
-// 创建用户响应
 message CreateUserResponse {
-    User user = 1;
+  User user = 1;
 }
 
-// 获取余额请求
-message GetBalanceRequest {
-    int64 user_id = 1;
+message LoginRequest {
+  string username = 1;
+  string password = 2;
 }
 
-// 获取余额响应
-message GetBalanceResponse {
-    int64 user_id = 1;
-    string available_balance = 2;  // 可用余额
-    string frozen_balance = 3;     // 冻结余额
-    string total_balance = 4;      // 总余额
+message LoginResponse {
+  int64 user_id = 1;
+  string username = 2;
+  string role = 3;
 }
 
-// 冻结余额请求
-message FreezeAmountRequest {
-    int64 user_id = 1;
-    string amount = 2;             // 冻结金额
-    string order_id = 3;           // 关联订单ID
+message GetUserRequest {
+  int64 user_id = 1;
 }
 
-// 冻结余额响应
-message FreezeAmountResponse {
-    bool success = 1;
-    string new_available_balance = 2;
-    string new_frozen_balance = 3;
+message GetUserResponse {
+  User user = 1;
 }
 
-// 解冻余额请求
-message UnfreezeAmountRequest {
-    int64 user_id = 1;
-    string amount = 2;             // 解冻金额
-    string order_id = 3;           // 关联订单ID
+message Balance {
+  string asset = 1;
+  string available = 2;
+  string frozen = 3;
 }
 
-// 解冻余额响应
-message UnfreezeAmountResponse {
-    bool success = 1;
-    string new_available_balance = 2;
-    string new_frozen_balance = 3;
+message GetBalancesRequest {
+  int64 user_id = 1;
 }
 
-// 扣减余额请求（用于撮合成交）
-message DeductAmountRequest {
-    int64 user_id = 1;
-    string amount = 2;             // 扣减金额
-    string order_id = 3;           // 关联订单ID
+message GetBalancesResponse {
+  repeated Balance balances = 1;
 }
 
-// 扣减余额响应
-message DeductAmountResponse {
-    bool success = 1;
-    string new_balance = 2;
+message DepositRequest {
+  int64 user_id = 1;
+  string asset = 2;
+  string amount = 3;
+  string ref_id = 4;
 }
 
-// 增加余额请求
-message AddAmountRequest {
-    int64 user_id = 1;
-    string amount = 2;             // 增加金额
-    string trade_id = 3;           // 关联交易ID
+message DepositResponse {
+  Balance balance = 1;
 }
 
-// 增加余额响应
-message AddAmountResponse {
-    bool success = 1;
-    string new_balance = 2;
+message FreezeRequest {
+  int64 user_id = 1;
+  string asset = 2;
+  string amount = 3;
+  string order_id = 4;
 }
+
+message FreezeResponse {
+  bool ok = 1;
+  // ok=false 时为 "insufficient_balance"。
+  string reason = 2;
+}
+
+message UnfreezeRequest {
+  int64 user_id = 1;
+  string asset = 2;
+  string amount = 3;
+  string order_id = 4;
+}
+
+message UnfreezeResponse {}
+
+message SettleTradeRequest {
+  string trade_id = 1;
+  string base_asset = 2;
+  string quote_asset = 3;
+  int64 buy_user_id = 4;
+  int64 sell_user_id = 5;
+  string price = 6;
+  string quantity = 7;
+  string buy_order_price = 8;
+}
+
+message SettleTradeResponse {}

@@ -1,348 +1,174 @@
-// Package server provides gRPC service implementation
+// Package server exposes the matching engine over gRPC.
 package server
 
 import (
 	"context"
-	"strings"
-	"time"
+	"errors"
+	"math"
 
 	matchingpb "github.com/linxun2025/exchange-project/api/gen/matching/v1"
-	orderpb "github.com/linxun2025/exchange-project/api/gen/order/v1"
-	"github.com/linxun2025/exchange-project/internal/matching/client"
+	"github.com/linxun2025/exchange-project/internal/matching/book"
 	"github.com/linxun2025/exchange-project/internal/matching/engine"
-	"github.com/linxun2025/exchange-project/internal/model"
-	"github.com/linxun2025/exchange-project/internal/order/repository"
-	"github.com/linxun2025/exchange-project/pkg/logger"
-	"github.com/shopspring/decimal"
-	"go.uber.org/zap"
+	"github.com/linxun2025/exchange-project/pkg/money"
+	"github.com/linxun2025/exchange-project/pkg/symbol"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// MatchingServer matching service gRPC server implementation
 type MatchingServer struct {
 	matchingpb.UnimplementedMatchingServiceServer
-	matcher     *engine.Matcher
-	orderClient *client.OrderClient
-	tradeRepo   *repository.TradeRepository
+	matcher *engine.Matcher
+	allowed func(symbol.Pair) bool
 }
 
-var orderTypeMap = map[matchingpb.OrderType]model.OrderType{
-	matchingpb.OrderType_ORDER_TYPE_LIMIT:  model.OrderTypeLimit,
-	matchingpb.OrderType_ORDER_TYPE_MARKET: model.OrderTypeMarket,
-	matchingpb.OrderType_ORDER_TYPE_IOC:    model.OrderTypeIOC,
-	matchingpb.OrderType_ORDER_TYPE_FOK:    model.OrderTypeFOK,
+func NewMatchingServer(m *engine.Matcher, symbols []string) *MatchingServer {
+	return &MatchingServer{matcher: m, allowed: symbol.Allowed(symbols)}
 }
 
-// NewMatchingServer creates matching service gRPC server
-func NewMatchingServer(matcher *engine.Matcher, orderClient *client.OrderClient, tradeRepo *repository.TradeRepository) *MatchingServer {
-	return &MatchingServer{
-		matcher:     matcher,
-		orderClient: orderClient,
-		tradeRepo:   tradeRepo,
+func (s *MatchingServer) parseSymbol(raw string) (string, error) {
+	pair, err := symbol.Parse(raw)
+	if err != nil || !s.allowed(pair) {
+		return "", status.Error(codes.InvalidArgument, "unsupported symbol")
 	}
+	return pair.String(), nil
 }
 
-// SubmitOrder submits order for matching
 func (s *MatchingServer) SubmitOrder(ctx context.Context, req *matchingpb.SubmitOrderRequest) (*matchingpb.SubmitOrderResponse, error) {
-	price, err := decimal.NewFromString(req.Price)
+	pair, err := s.parseSymbol(req.GetSymbol())
 	if err != nil {
-		logger.WithContext(ctx).Error("invalid price", zap.String("price", req.Price))
 		return nil, err
 	}
-
-	quantity, err := decimal.NewFromString(req.Quantity)
-	if err != nil {
-		logger.WithContext(ctx).Error("invalid quantity", zap.String("quantity", req.Quantity))
-		return nil, err
-	}
-
-	var side model.OrderSide
-	switch req.Side {
+	o := book.Order{ID: req.GetOrderId(), UserID: req.GetUserId()}
+	switch req.GetSide() {
 	case matchingpb.OrderSide_ORDER_SIDE_BUY:
-		side = model.OrderSideBuy
+		o.Side = book.Buy
 	case matchingpb.OrderSide_ORDER_SIDE_SELL:
-		side = model.OrderSideSell
+		o.Side = book.Sell
 	default:
-		side = model.OrderSideBuy
+		return nil, status.Error(codes.InvalidArgument, "invalid side")
 	}
-
-	orderType := orderTypeMap[req.OrderType]
-	if orderType == "" {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid order type: %v, must be one of: limit, market, ioc, fok", req.OrderType)
-	}
-
-	result, err := s.matcher.SubmitOrder(ctx, req.OrderId, req.UserId, req.Symbol, side, orderType, price, quantity)
-	if err != nil {
-		if strings.Contains(err.Error(), "timeout") || err == context.DeadlineExceeded {
-			return nil, status.Error(codes.DeadlineExceeded, err.Error())
+	switch req.GetType() {
+	case matchingpb.OrderType_ORDER_TYPE_LIMIT:
+		o.Kind = book.Limit
+	case matchingpb.OrderType_ORDER_TYPE_IOC:
+		o.Kind = book.IOC
+	case matchingpb.OrderType_ORDER_TYPE_FOK:
+		o.Kind = book.FOK
+	case matchingpb.OrderType_ORDER_TYPE_MARKET:
+		o.Kind = book.Market
+		if o.Side == book.Buy {
+			return nil, status.Error(codes.InvalidArgument, "market buy not supported")
 		}
-		if st, ok := status.FromError(err); ok {
-			return nil, st.Err()
+	default:
+		return nil, status.Error(codes.InvalidArgument, "invalid order type")
+	}
+	if o.Kind == book.Market {
+		if req.GetPrice() != "" && req.GetPrice() != "0" {
+			return nil, status.Error(codes.InvalidArgument, "market order price must be zero or empty")
 		}
-		logger.WithContext(ctx).Error("SubmitOrder failed",
-			logger.S("order_id", req.OrderId),
-			logger.I64("user_id", req.UserId),
-			logger.S("symbol", req.Symbol),
-			zap.Error(err),
-		)
-		return nil, status.Errorf(codes.Internal, "matching failed: %v", err)
-	}
-
-	// FOK: return error if partial fill
-	if orderType == model.OrderTypeFOK && result.Error != nil {
-		return nil, status.Error(codes.InvalidArgument, "FOK requires full fill")
-	}
-
-	// Market: return Unavailable if insufficient liquidity
-	if orderType == model.OrderTypeMarket && result.UnfilledQty.GreaterThan(decimal.Zero) {
-		return nil, status.Error(codes.Unavailable, "insufficient liquidity")
-	}
-
-	// Update order status in Order Service
-	if s.orderClient != nil {
-		go s.updateOrderStatusAfterMatching(ctx, req.OrderId, result)
-	}
-
-	trades := make([]*matchingpb.Trade, len(result.Trades))
-	for i, trade := range result.Trades {
-		trades[i] = &matchingpb.Trade{
-			TradeId:     trade.TradeID,
-			BuyOrderId:  trade.BuyOrderID,
-			SellOrderId: trade.SellOrderID,
-			Symbol:      trade.Symbol,
-			Price:       decimal.NewFromFloat(trade.Price.InexactFloat64()).String(),
-			Quantity:    decimal.NewFromFloat(trade.Quantity.InexactFloat64()).String(),
-			BuyUserId:   trade.BuyUserID,
-			SellUserId:  trade.SellUserID,
-			CreatedAt:   timestamppb.New(time.Unix(0, trade.CreatedAt)),
-		}
-	}
-
-	return &matchingpb.SubmitOrderResponse{
-		Success:           true,
-		Trades:            trades,
-		RemainingQuantity: result.Remaining.String(),
-	}, nil
-}
-
-// GetOrderBook gets order book snapshot
-func (s *MatchingServer) GetOrderBook(ctx context.Context, req *matchingpb.GetOrderBookRequest) (*matchingpb.GetOrderBookResponse, error) {
-	depth := int(req.Depth)
-	if depth <= 0 {
-		depth = 10
-	}
-
-	bids, asks := s.matcher.GetOrderBook(req.Symbol, depth)
-
-	protoBids := make([]*matchingpb.OrderBookEntry, len(bids))
-	for i, bid := range bids {
-		protoBids[i] = &matchingpb.OrderBookEntry{
-			Price:      bid.Price.String(),
-			Quantity:   bid.RemainingQty.String(),
-			OrderCount: 1,
-		}
-	}
-
-	protoAsks := make([]*matchingpb.OrderBookEntry, len(asks))
-	for i, ask := range asks {
-		protoAsks[i] = &matchingpb.OrderBookEntry{
-			Price:      ask.Price.String(),
-			Quantity:   ask.RemainingQty.String(),
-			OrderCount: 1,
-		}
-	}
-
-	return &matchingpb.GetOrderBookResponse{
-		OrderBook: &matchingpb.OrderBook{
-			Symbol:    req.Symbol,
-			Bids:      protoBids,
-			Asks:      protoAsks,
-			Timestamp: timestamppb.Now(),
-		},
-	}, nil
-}
-
-// GetTrades gets trade history
-func (s *MatchingServer) GetTrades(ctx context.Context, req *matchingpb.GetTradesRequest) (*matchingpb.GetTradesResponse, error) {
-	if s.tradeRepo == nil {
-		logger.WithContext(ctx).Error("trade repository not initialized")
-		return &matchingpb.GetTradesResponse{
-			Trades:      []*matchingpb.Trade{},
-			NextCursor: "",
-			HasMore:    false,
-		}, nil
-	}
-
-	limit := int(req.Limit)
-	if limit <= 0 {
-		limit = 50
-	}
-	if limit > 100 {
-		limit = 100
-	}
-
-	offset := 0
-	if req.Cursor != "" {
-		// Parse cursor for pagination (base64 encoded offset)
-		if parsedOffset, err := parseCursor(req.Cursor); err == nil {
-			offset = parsedOffset
-		}
-	}
-
-	var trades []*model.Trade
-	var err error
-
-	if req.Symbol != "" {
-		trades, err = s.tradeRepo.ListBySymbol(ctx, req.Symbol, limit+1, offset)
-	} else if req.UserId > 0 {
-		trades, err = s.tradeRepo.ListByUser(ctx, req.UserId, "", limit+1, offset)
-	} else if req.OrderId != "" {
-		trades, err = s.tradeRepo.ListByOrderID(ctx, req.OrderId, limit+1, offset)
 	} else {
-		trades, err = s.tradeRepo.GetRecentTrades(ctx, "", limit+1)
+		o.Price, err = positiveTicks(req.GetPrice())
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "invalid price")
+		}
 	}
-
+	o.Qty, err = positiveTicks(req.GetQuantity())
 	if err != nil {
-		logger.WithContext(ctx).Error("failed to get trades",
-			logger.S("symbol", req.Symbol),
-			logger.I64("user_id", req.UserId),
-			logger.S("order_id", req.OrderId),
-			logger.Err(err),
-		)
+		return nil, status.Error(codes.InvalidArgument, "invalid quantity")
+	}
+	r, err := s.matcher.Submit(ctx, pair, o)
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	reply := &matchingpb.SubmitOrderResponse{
+		OrderId: r.OrderID, FilledQuantity: ticksString(r.Filled), RemainingQuantity: ticksString(r.Remaining),
+		Resting: r.Resting, RejectReason: matchingpb.RejectReason(r.Reject),
+	}
+	if len(r.Trades) > 0 {
+		reply.Trades = make([]*matchingpb.Trade, 0, len(r.Trades))
+		for _, t := range r.Trades {
+			reply.Trades = append(reply.Trades, &matchingpb.Trade{
+				TradeId: t.ID, Symbol: pair, BuyOrderId: t.BuyOrderID, SellOrderId: t.SellOrderID,
+				BuyUserId: t.BuyUserID, SellUserId: t.SellUserID, Price: ticksString(t.Price), Quantity: ticksString(t.Qty),
+				TakerSide: matchingpb.OrderSide(t.TakerSide), Lsn: t.LSN, CreatedAt: timestamppb.New(t.At),
+			})
+		}
+	}
+	return reply, nil
+}
+
+func (s *MatchingServer) CancelOrder(ctx context.Context, req *matchingpb.CancelOrderRequest) (*matchingpb.CancelOrderResponse, error) {
+	pair, err := s.parseSymbol(req.GetSymbol())
+	if err != nil {
 		return nil, err
 	}
-
-	hasMore := len(trades) > limit
-	if hasMore {
-		trades = trades[:limit]
+	r, err := s.matcher.Cancel(ctx, pair, req.GetOrderId())
+	if err != nil {
+		return nil, rpcError(err)
 	}
-
-	protoTrades := make([]*matchingpb.Trade, len(trades))
-	for i, trade := range trades {
-		protoTrades[i] = &matchingpb.Trade{
-			TradeId:     trade.TradeID,
-			BuyOrderId:  trade.BuyOrderID,
-			SellOrderId: trade.SellOrderID,
-			Symbol:      trade.Symbol,
-			Price:       decimal.NewFromFloat(trade.Price).String(),
-			Quantity:    decimal.NewFromFloat(trade.Quantity).String(),
-			BuyUserId:   trade.BuyUserID,
-			SellUserId:  trade.SellUserID,
-			CreatedAt:   timestamppb.New(trade.CreatedAt),
-		}
-	}
-
-	var nextCursor string
-	if hasMore {
-		nextCursor = encodeCursor(offset + limit)
-	}
-
-	return &matchingpb.GetTradesResponse{
-		Trades:      protoTrades,
-		NextCursor: nextCursor,
-		HasMore:    hasMore,
-	}, nil
+	return &matchingpb.CancelOrderResponse{Found: r.Found, RemainingQuantity: ticksString(r.Remaining)}, nil
 }
 
-// parseCursor parses a cursor string (base64 encoded offset)
-func parseCursor(cursor string) (int, error) {
-	data, err := decodeBase64(cursor)
+func (s *MatchingServer) GetOrderBook(ctx context.Context, req *matchingpb.GetOrderBookRequest) (*matchingpb.GetOrderBookResponse, error) {
+	pair, err := s.parseSymbol(req.GetSymbol())
+	if err != nil {
+		return nil, err
+	}
+	depth := req.GetDepth()
+	if depth == 0 {
+		depth = 20
+	}
+	if depth < 1 || depth > 200 {
+		return nil, status.Error(codes.InvalidArgument, "depth must be between 1 and 200")
+	}
+	res, err := s.matcher.Depth(ctx, pair, int(depth))
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	bids, err := priceLevels(res.Bids)
+	if err != nil {
+		return nil, err
+	}
+	asks, err := priceLevels(res.Asks)
+	if err != nil {
+		return nil, err
+	}
+	return &matchingpb.GetOrderBookResponse{Symbol: pair, Bids: bids, Asks: asks, Lsn: res.LSN}, nil
+}
+
+func priceLevels(levels []book.Level) ([]*matchingpb.PriceLevel, error) {
+	out := make([]*matchingpb.PriceLevel, len(levels))
+	for i, l := range levels {
+		if l.Orders > math.MaxInt32 {
+			return nil, status.Error(codes.Internal, "order count exceeds response capacity")
+		}
+		out[i] = &matchingpb.PriceLevel{Price: ticksString(l.Price), Quantity: ticksString(l.Qty), OrderCount: int32(l.Orders)}
+	}
+	return out, nil
+}
+
+func ticksString(n int64) string { return money.FromTicks(n).String() }
+
+func positiveTicks(s string) (int64, error) {
+	d, err := money.ParsePositive(s)
 	if err != nil {
 		return 0, err
 	}
-	var offset int
-	for _, b := range data {
-		offset = offset*256 + int(b)
-	}
-	return offset, nil
+	return money.ToTicks(d)
 }
 
-// encodeCursor encodes an offset as a cursor string
-func encodeCursor(offset int) string {
-	data := []byte{}
-	for offset > 0 {
-		data = append([]byte{byte(offset % 256)}, data...)
-		offset /= 256
-	}
-	return encodeBase64(data)
-}
-
-// decodeBase64 decodes a base64 string
-func decodeBase64(s string) ([]byte, error) {
-	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-	decoder := make([]byte, 256)
-	for i := range decoder {
-		decoder[i] = 0xFF
-	}
-	for i := 0; i < len(alphabet); i++ {
-		decoder[alphabet[i]] = byte(i)
-	}
-
-	result := []byte{}
-	padding := 0
-	for i := 0; i < len(s); i += 4 {
-		var val int
-		for j := 0; j < 4 && i+j < len(s); j++ {
-			c := s[i+j]
-			if c == '=' {
-				padding++
-			} else {
-				val = val<<6 | int(decoder[c])
-			}
-		}
-		val <<= (6 * padding)
-		result = append(result, byte(val>>16), byte(val>>8), byte(val))
-	}
-	return result[:len(result)-padding], nil
-}
-
-// encodeBase64 encodes bytes to base64
-func encodeBase64(data []byte) string {
-	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-	result := ""
-	for i := 0; i < len(data); i += 3 {
-		var val int
-		var padding int
-		for j := 0; j < 3 && i+j < len(data); j++ {
-			val = val<<8 | int(data[i+j])
-		}
-		padding = 3 - (len(data)-i)%3
-		if padding == 3 {
-			padding = 0
-		}
-		val <<= (padding * 8)
-		for j := 0; j < 4; j++ {
-			if j < 4-padding {
-				result += string(alphabet[(val>>18)&0x3F])
-				val <<= 6
-			} else {
-				result += "="
-			}
-		}
-	}
-	return result
-}
-
-// updateOrderStatusAfterMatching updates order status after matching
-func (s *MatchingServer) updateOrderStatusAfterMatching(ctx context.Context, orderID string, result *engine.MatchResult) {
-	if result.Remaining.IsZero() {
-		// Fully filled
-		if err := s.orderClient.UpdateOrderStatus(ctx, orderID, orderpb.OrderStatus_ORDER_STATUS_FILLED, result.Remaining.String()); err != nil {
-			logger.WithContext(ctx).Error("failed to update order status to FILLED",
-				logger.S("order_id", orderID),
-				logger.Err(err),
-			)
-		}
-	} else if !result.Remaining.IsZero() && len(result.Trades) > 0 {
-		// Partially filled
-		filledQty := decimal.Zero.Sub(result.Remaining).String()
-		if err := s.orderClient.UpdateOrderStatus(ctx, orderID, orderpb.OrderStatus_ORDER_STATUS_PARTIAL_FILLED, filledQty); err != nil {
-			logger.WithContext(ctx).Error("failed to update order status to PARTIAL_FILLED",
-				logger.S("order_id", orderID),
-				logger.Err(err),
-			)
-		}
+func rpcError(err error) error {
+	switch {
+	case errors.Is(err, engine.ErrUnknownSymbol), errors.Is(err, engine.ErrInvalidOrder):
+		return status.Error(codes.InvalidArgument, err.Error())
+	case errors.Is(err, engine.ErrClosed):
+		return status.Error(codes.Unavailable, err.Error())
+	case errors.Is(err, context.DeadlineExceeded):
+		return status.Error(codes.DeadlineExceeded, err.Error())
+	case errors.Is(err, context.Canceled):
+		return status.Error(codes.Canceled, err.Error())
+	default:
+		return status.Error(codes.Internal, "matching request failed")
 	}
 }

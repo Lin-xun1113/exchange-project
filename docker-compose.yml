@@ -1,10 +1,22 @@
-version: '3.8'
+x-app-env: &app-env
+  APP_ENVIRONMENT: development
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+
+x-db-env: &db-env
+  DB_HOST: mysql
+  DB_PORT: "3306"
+  DB_USERNAME: exchange
+  DB_PASSWORD: exchange123
+  DB_DATABASE: exchange
+
+x-grpc-env: &grpc-env
+  USER_GRPC_ADDR: user-svc:50051
+  ORDER_GRPC_ADDR: order-svc:50052
+  MATCHING_GRPC_ADDR: matching-svc:50053
 
 services:
-  # MySQL 数据库
   mysql:
     image: mysql:8.0
-    container_name: exchange-mysql
     environment:
       MYSQL_ROOT_PASSWORD: password
       MYSQL_DATABASE: exchange
@@ -14,18 +26,18 @@ services:
       - "3308:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./migrations:/docker-entrypoint-initdb.d
-    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-ppassword"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      test: ["CMD-SHELL", 'MYSQL_PWD="$${MYSQL_PASSWORD}" mysql --protocol=tcp -h 127.0.0.1 -u "$${MYSQL_USER}" "$${MYSQL_DATABASE}" -e "SELECT 1 FROM orders LIMIT 0"']
+      interval: 5s
+      timeout: 3s
+      start_period: 20s
+      retries: 12
+    networks: [exchange-network]
 
-  # Redis 缓存
   redis:
     image: redis:7-alpine
-    container_name: exchange-redis
     ports:
       - "6379:6379"
     volumes:
@@ -33,148 +45,114 @@ services:
     command: redis-server --appendonly yes
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
+      interval: 5s
+      timeout: 3s
       retries: 5
+    networks: [exchange-network]
 
-  # Jaeger (OpenTelemetry backend)
   jaeger:
     image: jaegertracing/all-in-one:1.52
-    container_name: exchange-jaeger
     ports:
-      - "6831:6831/udp"   # Jaeger agent (compact thrift)
-      - "16686:16686"       # Jaeger UI
-      - "4317:4317"         # OTLP gRPC receiver
-      - "4318:4318"         # OTLP HTTP receiver
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
-    networks:
-      - exchange-network
+    networks: [exchange-network]
 
-  # API Gateway
   gateway:
     build:
       context: .
-      dockerfile: Dockerfile.gateway
-    container_name: exchange-gateway
+      target: gateway
     environment:
-      APP_ENVIRONMENT: development
-      DB_HOST: mysql
-      DB_PORT: 3308
-      DB_USERNAME: root
-      DB_PASSWORD: password
-      DB_DATABASE: exchange
+      <<: [*app-env, *grpc-env]
       REDIS_HOST: redis
-      REDIS_PORT: 6379
+      REDIS_PORT: "6379"
       JWT_SECRET: dev-secret-key-change-in-production
-      SERVER_PORT: 8080
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
-      OTEL_SERVICE_NAME: gateway
+      SERVER_PORT: "8080"
     ports:
       - "8080:8080"
     depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      jaeger:
-        condition: service_started
-    networks:
-      - exchange-network
-
-  # User Service
-  user-svc:
-    build:
-      context: .
-      dockerfile: Dockerfile.user-svc
-    container_name: exchange-user-svc
-    environment:
-      APP_ENVIRONMENT: development
-      DB_HOST: mysql
-      DB_PORT: 3308
-      DB_USERNAME: root
-      DB_PASSWORD: password
-      DB_DATABASE: exchange
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      GRPC_PORT: 50051
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
-      OTEL_SERVICE_NAME: user-svc
-    ports:
-      - "50051:50051"
-    depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      jaeger:
-        condition: service_started
-    networks:
-      - exchange-network
-
-  # Order Service
-  order-svc:
-    build:
-      context: .
-      dockerfile: Dockerfile.order-svc
-    container_name: exchange-order-svc
-    environment:
-      APP_ENVIRONMENT: development
-      DB_HOST: mysql
-      DB_PORT: 3308
-      DB_USERNAME: root
-      DB_PASSWORD: password
-      DB_DATABASE: exchange
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      GRPC_PORT: 50052
-      USER_SVC_ADDR: user-svc:50051
-      MATCHING_SVC_ADDR: matching-svc:50053
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
-      OTEL_SERVICE_NAME: order-svc
-    ports:
-      - "50052:50052"
-    depends_on:
-      mysql:
-        condition: service_healthy
       redis:
         condition: service_healthy
       user-svc:
-        condition: service_started
-      jaeger:
-        condition: service_started
-    networks:
-      - exchange-network
+        condition: service_healthy
+      order-svc:
+        condition: service_healthy
+      matching-svc:
+        condition: service_healthy
+    networks: [exchange-network]
 
-  # Matching Service
+  user-svc:
+    build:
+      context: .
+      target: user-svc
+    environment:
+      <<: [*app-env, *db-env]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks: [exchange-network]
+
+  order-svc:
+    build:
+      context: .
+      target: order-svc
+    environment:
+      <<: [*app-env, *db-env, *grpc-env]
+    depends_on:
+      mysql:
+        condition: service_healthy
+      user-svc:
+        condition: service_healthy
+      matching-svc:
+        condition: service_healthy
+    networks: [exchange-network]
+
   matching-svc:
     build:
       context: .
-      dockerfile: Dockerfile.matching-svc
-    container_name: exchange-matching-svc
+      target: matching-svc
     environment:
-      APP_ENVIRONMENT: development
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      GRPC_PORT: 50053
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
-      OTEL_SERVICE_NAME: matching-svc
-    ports:
-      - "50053:50053"
+      <<: *app-env
+      WAL_DIR: /data/wal
+      SNAPSHOT_DIR: /data/snapshot
     volumes:
-      - ./data/wal:/app/wal
-      - ./data/snapshot:/app/snapshot
+      - matching_data:/data
+    networks: [exchange-network]
+
+  demo-seed:
+    profiles: [demo]
+    build: {context: ., target: demo-seed}
+    environment:
+      <<: [*app-env, *db-env, *grpc-env]
+    restart: "no"
     depends_on:
-      redis:
+      mysql:
         condition: service_healthy
-      jaeger:
-        condition: service_started
-    networks:
-      - exchange-network
+      user-svc:
+        condition: service_healthy
+      order-svc:
+        condition: service_healthy
+      matching-svc:
+        condition: service_healthy
+    networks: [exchange-network]
+
+  web:
+    profiles: [demo]
+    build: ./web
+    ports: ["8088:80"]
+    depends_on:
+      gateway:
+        condition: service_healthy
+      demo-seed:
+        condition: service_completed_successfully
+    networks: [exchange-network]
 
 volumes:
   mysql_data:
   redis_data:
+  matching_data:
 
 networks:
   exchange-network:

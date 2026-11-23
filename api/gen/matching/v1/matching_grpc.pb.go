@@ -20,22 +20,19 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	MatchingService_SubmitOrder_FullMethodName  = "/matching.v1.MatchingService/SubmitOrder"
+	MatchingService_CancelOrder_FullMethodName  = "/matching.v1.MatchingService/CancelOrder"
 	MatchingService_GetOrderBook_FullMethodName = "/matching.v1.MatchingService/GetOrderBook"
-	MatchingService_GetTrades_FullMethodName    = "/matching.v1.MatchingService/GetTrades"
 )
 
 // MatchingServiceClient is the client API for MatchingService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-//
-// 撮合服务定义（内部服务，不对外暴露）
 type MatchingServiceClient interface {
-	// 提交订单进行撮合
+	// 结果保留期间，同一 order_id 重试返回首次结果（含相同成交列表）。
 	SubmitOrder(ctx context.Context, in *SubmitOrderRequest, opts ...grpc.CallOption) (*SubmitOrderResponse, error)
-	// 获取订单簿快照
+	// 结果保留期间，重复撤销已撤订单返回首次结果且不再写 WAL。
+	CancelOrder(ctx context.Context, in *CancelOrderRequest, opts ...grpc.CallOption) (*CancelOrderResponse, error)
 	GetOrderBook(ctx context.Context, in *GetOrderBookRequest, opts ...grpc.CallOption) (*GetOrderBookResponse, error)
-	// 获取交易历史
-	GetTrades(ctx context.Context, in *GetTradesRequest, opts ...grpc.CallOption) (*GetTradesResponse, error)
 }
 
 type matchingServiceClient struct {
@@ -56,6 +53,16 @@ func (c *matchingServiceClient) SubmitOrder(ctx context.Context, in *SubmitOrder
 	return out, nil
 }
 
+func (c *matchingServiceClient) CancelOrder(ctx context.Context, in *CancelOrderRequest, opts ...grpc.CallOption) (*CancelOrderResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CancelOrderResponse)
+	err := c.cc.Invoke(ctx, MatchingService_CancelOrder_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *matchingServiceClient) GetOrderBook(ctx context.Context, in *GetOrderBookRequest, opts ...grpc.CallOption) (*GetOrderBookResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetOrderBookResponse)
@@ -66,28 +73,15 @@ func (c *matchingServiceClient) GetOrderBook(ctx context.Context, in *GetOrderBo
 	return out, nil
 }
 
-func (c *matchingServiceClient) GetTrades(ctx context.Context, in *GetTradesRequest, opts ...grpc.CallOption) (*GetTradesResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetTradesResponse)
-	err := c.cc.Invoke(ctx, MatchingService_GetTrades_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // MatchingServiceServer is the server API for MatchingService service.
 // All implementations must embed UnimplementedMatchingServiceServer
 // for forward compatibility.
-//
-// 撮合服务定义（内部服务，不对外暴露）
 type MatchingServiceServer interface {
-	// 提交订单进行撮合
+	// 结果保留期间，同一 order_id 重试返回首次结果（含相同成交列表）。
 	SubmitOrder(context.Context, *SubmitOrderRequest) (*SubmitOrderResponse, error)
-	// 获取订单簿快照
+	// 结果保留期间，重复撤销已撤订单返回首次结果且不再写 WAL。
+	CancelOrder(context.Context, *CancelOrderRequest) (*CancelOrderResponse, error)
 	GetOrderBook(context.Context, *GetOrderBookRequest) (*GetOrderBookResponse, error)
-	// 获取交易历史
-	GetTrades(context.Context, *GetTradesRequest) (*GetTradesResponse, error)
 	mustEmbedUnimplementedMatchingServiceServer()
 }
 
@@ -101,11 +95,11 @@ type UnimplementedMatchingServiceServer struct{}
 func (UnimplementedMatchingServiceServer) SubmitOrder(context.Context, *SubmitOrderRequest) (*SubmitOrderResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SubmitOrder not implemented")
 }
+func (UnimplementedMatchingServiceServer) CancelOrder(context.Context, *CancelOrderRequest) (*CancelOrderResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CancelOrder not implemented")
+}
 func (UnimplementedMatchingServiceServer) GetOrderBook(context.Context, *GetOrderBookRequest) (*GetOrderBookResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetOrderBook not implemented")
-}
-func (UnimplementedMatchingServiceServer) GetTrades(context.Context, *GetTradesRequest) (*GetTradesResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetTrades not implemented")
 }
 func (UnimplementedMatchingServiceServer) mustEmbedUnimplementedMatchingServiceServer() {}
 func (UnimplementedMatchingServiceServer) testEmbeddedByValue()                         {}
@@ -146,6 +140,24 @@ func _MatchingService_SubmitOrder_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MatchingService_CancelOrder_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CancelOrderRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MatchingServiceServer).CancelOrder(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MatchingService_CancelOrder_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MatchingServiceServer).CancelOrder(ctx, req.(*CancelOrderRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _MatchingService_GetOrderBook_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetOrderBookRequest)
 	if err := dec(in); err != nil {
@@ -164,24 +176,6 @@ func _MatchingService_GetOrderBook_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
-func _MatchingService_GetTrades_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetTradesRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(MatchingServiceServer).GetTrades(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: MatchingService_GetTrades_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MatchingServiceServer).GetTrades(ctx, req.(*GetTradesRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // MatchingService_ServiceDesc is the grpc.ServiceDesc for MatchingService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -194,12 +188,12 @@ var MatchingService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _MatchingService_SubmitOrder_Handler,
 		},
 		{
-			MethodName: "GetOrderBook",
-			Handler:    _MatchingService_GetOrderBook_Handler,
+			MethodName: "CancelOrder",
+			Handler:    _MatchingService_CancelOrder_Handler,
 		},
 		{
-			MethodName: "GetTrades",
-			Handler:    _MatchingService_GetTrades_Handler,
+			MethodName: "GetOrderBook",
+			Handler:    _MatchingService_GetOrderBook_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

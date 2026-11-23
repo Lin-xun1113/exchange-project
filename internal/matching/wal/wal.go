@@ -1,634 +1,385 @@
+// Package wal implements the matching engine's single-writer segmented log.
 package wal
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/binary"
-	"encoding/gob"
+	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
-	"time"
 
+	"github.com/linxun2025/exchange-project/internal/matching/disk"
 	"github.com/linxun2025/exchange-project/pkg/logger"
-	"github.com/linxun2025/exchange-project/pkg/metrics"
+	"go.uber.org/zap"
 )
 
-// EntryType represents the type of a WAL entry.
-type EntryType uint8
+type SyncMode uint8
 
 const (
-	EntryTypeCommand EntryType = iota
-	EntryTypeCancel
-	EntryTypeTrade
+	SyncFsync SyncMode = iota + 1
+	SyncNone
 )
 
-// SyncMode represents the fsync strategy for WAL durability.
-type SyncMode int
+type RecordType uint8
 
 const (
-	// SyncNone disables fsync - highest throughput, no durability guarantee
-	SyncNone SyncMode = iota
-	// SyncAlways calls fsync after every append - maximum durability, highest latency
-	SyncAlways
-	// SyncByCount calls fsync after N entries accumulate since last fsync
-	SyncByCount
-	// SyncByDuration calls fsync if D time has elapsed since last fsync (Group Commit)
-	SyncByDuration
+	RecordSubmit RecordType = iota + 1
+	RecordCancel
 )
 
-func (t EntryType) String() string {
-	switch t {
-	case EntryTypeCommand:
-		return "command"
-	case EntryTypeCancel:
-		return "cancel"
-	case EntryTypeTrade:
-		return "trade"
-	default:
-		return "unknown"
-	}
-}
-
-// Entry represents a single WAL record.
-type Entry struct {
+// Record.Payload is valid until the next call to the replay handler.
+type Record struct {
 	LSN     uint64
-	Type    EntryType
-	Payload interface{}
+	Type    RecordType
+	Payload []byte
 }
 
-// CommandPayload is the payload for a submit order command.
-type CommandPayload struct {
-	OrderID   string
-	UserID    int64
-	Side      string
-	OrderType string
-	Price     string
-	Quantity  string
+const (
+	magic         = "EXWAL002"
+	baseFrameSize = 17                // uint32 length, uint32 CRC32C, uint64 LSN, byte type
+	frameSize     = baseFrameSize + 4 // followed by CRC32C of the base header
+	maxPayload    = 1 << 20
+	maxSegment    = 64 << 20
+	bufferBytes   = 64 << 10
+	segmentSuffix = ".wal"
+)
+
+var (
+	ErrCorrupt = errors.New("wal: corrupt")
+	crcTable   = crc32.MakeTable(crc32.Castagnoli)
+)
+
+type segment struct {
+	name  string
+	first uint64
+	last  uint64
 }
 
-// CancelPayload is the payload for a cancel order command.
-type CancelPayload struct {
-	OrderID string
+// Log belongs to one actor. Callers serialize all operations, including close.
+type Log struct {
+	dir          string
+	mode         SyncMode
+	segments     []segment
+	file         *os.File
+	writer       *bufio.Writer
+	size         int64
+	segmentBytes int64
+	last         uint64
 }
 
-// TradePayload is the payload for a trade event.
-type TradePayload struct {
-	TradeID     string
-	BuyOrderID  string
-	SellOrderID string
-	BuyUserID   int64
-	SellUserID  int64
-	Price       string
-	Quantity    string
-	Symbol      string
-	OrderID     string
+func SanitizeSymbol(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "/", "_"), ":", "_")
 }
 
-// WALWriter is the interface for writing to WAL.
-type WALWriter interface {
-	Append(entry *Entry) (uint64, error)
-	LastLSN() uint64
-	Close() error
-}
-
-// WAL implements an append-only Write-Ahead Log for a single symbol.
-type WAL struct {
-	mu     sync.Mutex
-	symbol string
-	path   string
-	file   *os.File
-	writer *bufio.Writer
-	lsn    atomic.Uint64
-	closed atomic.Bool
-
-	// Sync configuration
-	syncMode     SyncMode
-	syncEvery    uint64
-	syncInterval time.Duration
-	pendingSyncs uint64
-	lastSyncTime time.Time
-}
-
-// SanitizeSymbol converts a symbol to a safe filename by replacing special characters.
-// For example: "BTC/USDT" -> "BTC_USDT"
-func SanitizeSymbol(symbol string) string {
-	safeSymbol := strings.ReplaceAll(symbol, "/", "_")
-	safeSymbol = strings.ReplaceAll(safeSymbol, ":", "_")
-	return safeSymbol
-}
-
-// NewWAL opens (or creates) the WAL file for a symbol and returns a WAL instance.
-// syncMode: fsync strategy (SyncNone, SyncAlways, SyncByCount, SyncByDuration)
-// syncEvery: threshold for SyncByCount mode (number of entries)
-// syncInterval: threshold for SyncByDuration mode (Group Commit window)
-func NewWAL(symbol, dir string, syncMode SyncMode, syncEvery uint64, syncInterval time.Duration) (*WAL, error) {
-	// Sanitize symbol for use as filename
-	safeSymbol := SanitizeSymbol(symbol)
-
-	fullDir := filepath.Join(dir, safeSymbol)
-	if err := os.MkdirAll(fullDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create WAL dir %s: %w", fullDir, err)
+// Open scans all retained segments and repairs only a torn record at the end
+// of the final segment. A complete frame with a bad checksum is corruption.
+func Open(dir string, mode SyncMode) (*Log, error) {
+	if mode != SyncFsync && mode != SyncNone {
+		return nil, fmt.Errorf("invalid wal sync mode %d", mode)
 	}
-
-	path := filepath.Join(fullDir, safeSymbol+".wal")
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
+	if err := disk.EnsureDir(dir); err != nil {
+		return nil, err
+	}
+	files, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open WAL file %s: %w", path, err)
+		return nil, err
+	}
+	l := &Log{dir: dir, mode: mode, segmentBytes: maxSegment}
+	for _, f := range files {
+		name, ok := strings.CutSuffix(f.Name(), segmentSuffix)
+		if !ok {
+			continue
+		}
+		first, err := strconv.ParseUint(name, 10, 64)
+		if err != nil || first == 0 || len(name) != 20 || !f.Type().IsRegular() {
+			return nil, fmt.Errorf("%w: invalid segment %q", ErrCorrupt, f.Name())
+		}
+		l.segments = append(l.segments, segment{name: f.Name(), first: first})
+	}
+	if len(l.segments) == 0 {
+		if err := l.createSegment(1); err != nil {
+			return nil, err
+		}
+		return l, nil
 	}
 
-	now := time.Now()
-	w := &WAL{
-		symbol:        symbol,
-		path:          path,
-		file:          file,
-		writer:        bufio.NewWriter(file),
-		syncMode:      syncMode,
-		syncEvery:     syncEvery,
-		syncInterval:  syncInterval,
-		pendingSyncs:  0,
-		lastSyncTime:  now,
+	reader := newSegmentReader()
+	for i := range l.segments {
+		s := &l.segments[i]
+		if i > 0 && (l.last == math.MaxUint64 || s.first != l.last+1) {
+			return nil, fmt.Errorf("%w: discontinuity before segment %s after LSN %d", ErrCorrupt, s.name, l.last)
+		}
+		active := i == len(l.segments)-1
+		path := filepath.Join(dir, s.name)
+		if active {
+			l.file, err = os.OpenFile(path, os.O_RDWR|os.O_APPEND, 0)
+			if err != nil {
+				return nil, err
+			}
+			l.last, l.size, err = reader.scan(l.file, s.first, true, 0, nil)
+			if err != nil {
+				return nil, errors.Join(err, l.file.Close())
+			}
+			if mode == SyncFsync {
+				// In SyncFsync mode, rotation syncs each sealed segment
+				// before publishing its successor.
+				// The active segment may still have unsynced records or a
+				// pending rename from the previous process. Persist both
+				// (including any tail truncation) before replay or writes.
+				if err := l.file.Sync(); err != nil {
+					return nil, errors.Join(err, l.file.Close())
+				}
+				if err := disk.SyncDir(dir); err != nil {
+					return nil, errors.Join(err, l.file.Close())
+				}
+			}
+			l.writer = bufio.NewWriterSize(l.file, bufferBytes)
+		} else {
+			f, err := os.Open(path)
+			if err != nil {
+				return nil, err
+			}
+			l.last, _, err = reader.scan(f, s.first, false, 0, nil)
+			if err := errors.Join(err, f.Close()); err != nil {
+				return nil, err
+			}
+			if l.last < s.first {
+				return nil, fmt.Errorf("%w: empty sealed segment %s", ErrCorrupt, s.name)
+			}
+		}
+		s.last = l.last
 	}
-
-	if err := w.readLastLSN(); err != nil {
-		file.Close()
-		return nil, fmt.Errorf("failed to read last LSN: %w", err)
-	}
-
-	logger.Info("WAL opened",
-		logger.S("symbol", symbol),
-		logger.S("path", path),
-		logger.I64("last_lsn", int64(w.lsn.Load())),
-		logger.S("sync_mode", syncMode.String()),
-	)
-
-	return w, nil
+	return l, nil
 }
 
-// String returns the string representation of SyncMode.
-func (m SyncMode) String() string {
-	switch m {
-	case SyncNone:
-		return "none"
-	case SyncAlways:
-		return "always"
-	case SyncByCount:
-		return "bycount"
-	case SyncByDuration:
-		return "byduration"
-	default:
-		return "unknown"
-	}
-}
-
-// shouldSync returns true if fsync should be called based on current sync mode.
-func (w *WAL) shouldSync() bool {
-	switch w.syncMode {
-	case SyncNone:
-		return false
-	case SyncAlways:
-		return true
-	case SyncByCount:
-		return w.pendingSyncs >= w.syncEvery
-	case SyncByDuration:
-		return time.Since(w.lastSyncTime) >= w.syncInterval
-	}
-	return false
-}
-
-// readLastLSN scans the file to find the last complete record's LSN.
-func (w *WAL) readLastLSN() error {
-	info, err := w.file.Stat()
+func (l *Log) createSegment(first uint64) error {
+	name := fmt.Sprintf("%020d%s", first, segmentSuffix)
+	f, err := os.CreateTemp(l.dir, ".wal-*")
 	if err != nil {
 		return err
 	}
-	if info.Size() == 0 {
-		w.lsn.Store(0)
-		return nil
+	tmp := f.Name()
+	if err := l.publishSegment(f, filepath.Join(l.dir, name)); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
 	}
-
-	fileSize := info.Size()
-	if fileSize < 13 {
-		w.lsn.Store(0)
-		return nil
+	l.file = f
+	if l.writer == nil {
+		l.writer = bufio.NewWriterSize(f, bufferBytes)
+	} else {
+		l.writer.Reset(f)
 	}
-
-	// Read the entire file and find the last valid LSN.
-	data, err := io.ReadAll(w.file)
-	if err != nil {
-		w.lsn.Store(0)
-		return nil
-	}
-
-	var lastLSN uint64
-	pos := 0
-	for pos+13 <= len(data) {
-		lsn := binary.BigEndian.Uint64(data[pos:])
-		entryType := data[pos+8]
-		if entryType > 2 {
-			break
-		}
-		payloadLen := binary.BigEndian.Uint32(data[pos+9:])
-		totalLen := 13 + int(payloadLen)
-		if pos+totalLen > len(data) {
-			break
-		}
-		lastLSN = lsn
-		pos += totalLen
-	}
-
-	w.lsn.Store(lastLSN)
+	l.size = int64(len(magic))
+	l.segments = append(l.segments, segment{name: name, first: first, last: first - 1})
 	return nil
 }
 
-// Append writes a WAL entry to the file synchronously.
-func (w *WAL) Append(entry *Entry) (uint64, error) {
-	if w.closed.Load() {
-		return 0, fmt.Errorf("WAL is closed")
+func (l *Log) publishSegment(f *os.File, path string) error {
+	if _, err := f.WriteString(magic); err != nil {
+		return err
 	}
-
-	start := time.Now()
-	defer func() {
-		metrics.GetMetrics().RecordWALAppendLatency(time.Since(start), w.syncMode.String())
-	}()
-
-	lsn := w.lsn.Add(1)
-	entry.LSN = lsn
-
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-
-	switch p := entry.Payload.(type) {
-	case CommandPayload:
-		if err := enc.Encode(p); err != nil {
-			return 0, fmt.Errorf("failed to encode command payload: %w", err)
+	if l.mode == SyncFsync {
+		if err := f.Sync(); err != nil {
+			return err
 		}
-	case CancelPayload:
-		if err := enc.Encode(p); err != nil {
-			return 0, fmt.Errorf("failed to encode cancel payload: %w", err)
+	}
+	if err := os.Rename(f.Name(), path); err != nil {
+		return err
+	}
+	return disk.SyncDir(l.dir)
+}
+
+func (l *Log) LastLSN() uint64 { return l.last }
+
+func (l *Log) Append(t RecordType, payload []byte) (uint64, error) {
+	if l.file == nil {
+		return 0, os.ErrClosed
+	}
+	if !validType(t) || len(payload) > maxPayload || l.last == math.MaxUint64 {
+		return 0, fmt.Errorf("wal: cannot append record type %d, size %d after LSN %d", t, len(payload), l.last)
+	}
+	lsn := l.last + 1
+	if l.size >= l.segmentBytes {
+		if err := l.Sync(); err != nil {
+			return 0, err
 		}
-	case TradePayload:
-		if err := enc.Encode(p); err != nil {
-			return 0, fmt.Errorf("failed to encode trade payload: %w", err)
+		err := l.file.Close()
+		l.file = nil
+		if err != nil {
+			return 0, err
 		}
-	default:
-		return 0, fmt.Errorf("unsupported payload type: %T", entry.Payload)
-	}
-
-	payloadBytes := buf.Bytes()
-	payloadLen := uint32(len(payloadBytes))
-
-	record := make([]byte, 13+payloadLen)
-	binary.BigEndian.PutUint64(record[0:8], lsn)
-	record[8] = byte(entry.Type)
-	binary.BigEndian.PutUint32(record[9:13], payloadLen)
-	copy(record[13:], payloadBytes)
-
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	if _, err := w.writer.Write(record); err != nil {
-		return 0, fmt.Errorf("failed to write WAL record: %w", err)
-	}
-
-	// Flush to push data to OS page cache
-	if err := w.writer.Flush(); err != nil {
-		return lsn, fmt.Errorf("failed to flush WAL: %w", err)
-	}
-
-	// Increment pending counter
-	w.pendingSyncs++
-	metrics.GetMetrics().SetWALPendingEntries(int64(w.pendingSyncs))
-
-	// Sync to disk if sync condition is met
-	if w.shouldSync() {
-		syncStart := time.Now()
-		if err := w.file.Sync(); err != nil {
-			metrics.GetMetrics().RecordWALFsyncLatency(time.Since(syncStart), "failure")
-			logger.Error("WAL fsync failed",
-				logger.S("symbol", w.symbol),
-				logger.Err(err),
-			)
-		} else {
-			metrics.GetMetrics().RecordWALFsyncLatency(time.Since(syncStart), "success")
-			metrics.GetMetrics().RecordWALGroupSize(int64(w.pendingSyncs))
-			w.pendingSyncs = 0
-			w.lastSyncTime = time.Now()
+		if err := l.createSegment(lsn); err != nil {
+			return 0, err
 		}
 	}
 
-	logger.Debug("WAL append",
-		logger.S("symbol", w.symbol),
-		logger.I64("lsn", int64(lsn)),
-		logger.S("type", entry.Type.String()),
-	)
-
+	var frame [frameSize]byte
+	binary.BigEndian.PutUint32(frame[:4], uint32(len(payload)))
+	binary.BigEndian.PutUint64(frame[8:16], lsn)
+	frame[16] = byte(t)
+	binary.BigEndian.PutUint32(frame[4:8], checksum(frame[8:baseFrameSize], payload))
+	binary.BigEndian.PutUint32(frame[baseFrameSize:], crc32.Checksum(frame[:baseFrameSize], crcTable))
+	if _, err := l.writer.Write(frame[:]); err != nil {
+		return 0, err
+	}
+	if _, err := l.writer.Write(payload); err != nil {
+		return 0, err
+	}
+	l.last = lsn
+	l.size += int64(len(frame) + len(payload))
+	l.segments[len(l.segments)-1].last = lsn
 	return lsn, nil
 }
 
-// LastLSN returns the LSN of the last record in the WAL file.
-func (w *WAL) LastLSN() uint64 {
-	return w.lsn.Load()
+func checksum(header, payload []byte) uint32 {
+	return crc32.Update(crc32.Checksum(header, crcTable), crcTable, payload)
 }
 
-// Close flushes and closes the WAL file.
-func (w *WAL) Close() error {
-	if w.closed.Swap(true) {
-		return nil
+func validType(t RecordType) bool { return t == RecordSubmit || t == RecordCancel }
+
+func (l *Log) Sync() error {
+	if l.file == nil {
+		return os.ErrClosed
 	}
-
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	if w.writer != nil {
-		if err := w.writer.Flush(); err != nil {
-			logger.Error("failed to flush WAL on close",
-				logger.S("symbol", w.symbol),
-				logger.Err(err),
-			)
-		}
-	}
-
-	// Final sync if there are pending entries
-	if w.pendingSyncs > 0 && w.syncMode != SyncNone {
-		if err := w.file.Sync(); err != nil {
-			logger.Error("failed to sync WAL on close",
-				logger.S("symbol", w.symbol),
-				logger.Err(err),
-			)
-		} else {
-			metrics.GetMetrics().RecordWALGroupSize(int64(w.pendingSyncs))
-			w.pendingSyncs = 0
-		}
-	}
-
-	if w.file != nil {
-		if err := w.file.Close(); err != nil {
-			return fmt.Errorf("failed to close WAL file: %w", err)
-		}
-	}
-
-	logger.Info("WAL closed", logger.S("symbol", w.symbol))
-	return nil
-}
-
-// Replay reads WAL entries from fromLSN (exclusive) to the end, calling handler for each.
-func (w *WAL) Replay(fromLSN uint64, handler func(*Entry) error) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	file, err := os.Open(w.path)
-	if err != nil {
-		return fmt.Errorf("failed to open WAL for replay: %w", err)
-	}
-	defer file.Close()
-
-	reader := bufio.NewReader(file)
-
-	for {
-		header := make([]byte, 13)
-		_, err := reader.Read(header)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			break
-		}
-		if len(header) < 13 {
-			break
-		}
-
-		lsn := binary.BigEndian.Uint64(header[0:8])
-		if lsn <= fromLSN {
-			payloadLen := binary.BigEndian.Uint32(header[9:13])
-			skip := make([]byte, payloadLen)
-			reader.Read(skip)
-			continue
-		}
-
-		entryType := EntryType(header[8])
-		payloadLen := binary.BigEndian.Uint32(header[9:13])
-
-		payloadBytes := make([]byte, payloadLen)
-		if _, err := reader.Read(payloadBytes); err != nil {
-			logger.Warn("WAL replay: failed to read payload",
-				logger.S("symbol", w.symbol),
-				logger.I64("lsn", int64(lsn)),
-				logger.Err(err),
-			)
-			break
-		}
-
-		var payload interface{}
-		switch entryType {
-		case EntryTypeCommand:
-			var cmd CommandPayload
-			if err := gob.NewDecoder(bytes.NewReader(payloadBytes)).Decode(&cmd); err != nil {
-				logger.Warn("WAL replay: failed to decode command",
-					logger.S("symbol", w.symbol),
-					logger.I64("lsn", int64(lsn)),
-					logger.Err(err),
-				)
-				continue
-			}
-			payload = cmd
-		case EntryTypeCancel:
-			var cancel CancelPayload
-			if err := gob.NewDecoder(bytes.NewReader(payloadBytes)).Decode(&cancel); err != nil {
-				logger.Warn("WAL replay: failed to decode cancel",
-					logger.S("symbol", w.symbol),
-					logger.I64("lsn", int64(lsn)),
-					logger.Err(err),
-				)
-				continue
-			}
-			payload = cancel
-		case EntryTypeTrade:
-			var trade TradePayload
-			if err := gob.NewDecoder(bytes.NewReader(payloadBytes)).Decode(&trade); err != nil {
-				logger.Warn("WAL replay: failed to decode trade",
-					logger.S("symbol", w.symbol),
-					logger.I64("lsn", int64(lsn)),
-					logger.Err(err),
-				)
-				continue
-			}
-			payload = trade
-		}
-
-		entry := &Entry{LSN: lsn, Type: entryType, Payload: payload}
-		if err := handler(entry); err != nil {
-			return fmt.Errorf("WAL replay handler error at LSN %d: %w", lsn, err)
-		}
-	}
-
-	return nil
-}
-
-// Truncate removes all entries with LSN <= upToLSN from the WAL file.
-func (w *WAL) Truncate(upToLSN uint64) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.truncateLocked(upToLSN)
-}
-
-// Sync forces a flush of the WAL buffer to disk.
-func (w *WAL) Sync() error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	if w.writer != nil {
-		return w.writer.Flush()
-	}
-	return nil
-}
-
-// SnapshotLSN atomically captures the current LSN for snapshotting.
-// This ensures the snapshot and truncate operations use the same LSN.
-func (w *WAL) SnapshotLSN() uint64 {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.lsn.Load()
-}
-
-// WriteAtomicSnapshot writes snapshot data atomically and truncates WAL in one operation.
-// This prevents race conditions where new entries are added between getting the LSN and truncating.
-func (w *WAL) WriteAtomicSnapshot(data []byte, walLSN uint64) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	// Write the snapshot data to a temporary file
-	tmpPath := w.path + ".snap.tmp"
-	file, err := os.Create(tmpPath)
-	if err != nil {
-		return fmt.Errorf("failed to create temp snapshot file: %w", err)
-	}
-
-	if _, err := file.Write(data); err != nil {
-		file.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("failed to write snapshot data: %w", err)
-	}
-
-	if err := file.Close(); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("failed to close snapshot file: %w", err)
-	}
-
-	// Atomically rename the temp file to the final snapshot file
-	snapPath := w.path + ".snap"
-	if err := os.Rename(tmpPath, snapPath); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("failed to rename snapshot file: %w", err)
-	}
-
-	// Now truncate the WAL up to the snapshot LSN
-	// This is done atomically with the snapshot write under the same lock
-	if err := w.truncateLocked(walLSN); err != nil {
-		logger.Warn("snapshot saved but WAL truncation failed",
-			logger.S("wal_path", w.path),
-			logger.I64("wal_lsn", int64(walLSN)),
-			logger.Err(err),
-		)
+	if err := l.writer.Flush(); err != nil {
 		return err
 	}
-
-	logger.Info("WAL atomic snapshot completed",
-		logger.S("symbol", w.symbol),
-		logger.I64("wal_lsn", int64(walLSN)),
-	)
-
+	if l.mode == SyncFsync {
+		return l.file.Sync()
+	}
 	return nil
 }
 
-// truncateLocked truncates WAL entries up to upToLSN (must be called with w.mu held)
-func (w *WAL) truncateLocked(upToLSN uint64) error {
-	type record struct {
-		lsn   uint64
-		bytes []byte
+func (l *Log) Close() error {
+	if l.file == nil {
+		return nil
 	}
-	var records []record
+	err := errors.Join(l.Sync(), l.file.Close())
+	l.file = nil
+	return err
+}
 
-	file, err := os.Open(w.path)
-	if err != nil {
-		return fmt.Errorf("failed to open WAL for truncation: %w", err)
+// Replay reads durable records after after in LSN order.
+func (l *Log) Replay(after uint64, fn func(Record) error) error {
+	if after < l.segments[0].first-1 || after > l.last {
+		return fmt.Errorf("%w: cannot replay after LSN %d from retained range [%d, %d]", ErrCorrupt, after, l.segments[0].first, l.last)
 	}
-	defer file.Close()
-
-	reader := bufio.NewReader(file)
-
-	for {
-		header := make([]byte, 13)
-		_, err := reader.Read(header)
+	if after == l.last {
+		return nil
+	}
+	reader := newSegmentReader()
+	for _, s := range l.segments {
+		if s.last <= after {
+			continue
+		}
+		f, err := os.Open(filepath.Join(l.dir, s.name))
 		if err != nil {
-			break
+			return err
 		}
-		if len(header) < 13 {
-			break
+		last, _, err := reader.scan(f, s.first, false, after, fn)
+		if err := errors.Join(err, f.Close()); err != nil {
+			return err
 		}
-
-		lsn := binary.BigEndian.Uint64(header[0:8])
-		payloadLen := binary.BigEndian.Uint32(header[9:13])
-		totalLen := 13 + int(payloadLen)
-
-		recordBytes := make([]byte, totalLen)
-		copy(recordBytes[:13], header)
-
-		if _, err := reader.Read(recordBytes[13:]); err != nil {
-			break
-		}
-
-		if lsn > upToLSN {
-			records = append(records, record{lsn: lsn, bytes: recordBytes})
+		if last != s.last {
+			return fmt.Errorf("%w: segment %s changed while reopening for replay", ErrCorrupt, s.name)
 		}
 	}
-	file.Close()
-
-	newFile, err := os.Create(w.path)
-	if err != nil {
-		return fmt.Errorf("failed to create new WAL file: %w", err)
-	}
-
-	writer := bufio.NewWriter(newFile)
-	var newLastLSN uint64
-
-	for _, rec := range records {
-		if _, err := writer.Write(rec.bytes); err != nil {
-			return fmt.Errorf("failed to write truncated WAL: %w", err)
-		}
-		newLastLSN = rec.lsn
-	}
-
-	if err := writer.Flush(); err != nil {
-		return fmt.Errorf("failed to flush truncated WAL: %w", err)
-	}
-
-	if err := newFile.Sync(); err != nil {
-		return fmt.Errorf("failed to sync truncated WAL: %w", err)
-	}
-
-	// Update WAL's internal file and writer references
-	newFile.Close()
-	w.file.Close()
-	newFile, err = os.OpenFile(w.path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to reopen WAL after truncate: %w", err)
-	}
-	w.file = newFile
-	w.writer = bufio.NewWriter(newFile)
-
-	w.lsn.Store(newLastLSN)
-
-	logger.Info("WAL truncated",
-		logger.S("symbol", w.symbol),
-		logger.I64("up_to_lsn", int64(upToLSN)),
-		logger.I64("new_last_lsn", int64(newLastLSN)),
-		logger.I("remaining_records", len(records)),
-	)
-
 	return nil
+}
+
+// Compact removes only a contiguous prefix of sealed segments.
+func (l *Log) Compact(upTo uint64) error {
+	for len(l.segments) > 1 && l.segments[0].last <= upTo {
+		path := filepath.Join(l.dir, l.segments[0].name)
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		// Persist each prefix deletion before starting the next. After a
+		// crash, discovery must never see a hole between surviving segments.
+		if err := disk.SyncDir(l.dir); err != nil {
+			return err
+		}
+		l.segments = l.segments[1:]
+	}
+	return nil
+}
+
+type segmentReader struct {
+	r       *bufio.Reader
+	payload []byte
+}
+
+func newSegmentReader() *segmentReader {
+	return &segmentReader{r: bufio.NewReaderSize(nil, bufferBytes)}
+}
+
+func (r *segmentReader) scan(f *os.File, first uint64, active bool, after uint64, fn func(Record) error) (uint64, int64, error) {
+	r.r.Reset(f)
+	var header [len(magic)]byte
+	if _, err := io.ReadFull(r.r, header[:]); err != nil {
+		return 0, 0, corrupt(f, 0, fmt.Errorf("segment header: %w", err))
+	}
+	if string(header[:]) != magic {
+		return 0, 0, corrupt(f, 0, errors.New("bad segment magic"))
+	}
+	last, offset := first-1, int64(len(header))
+	var frame [frameSize]byte
+	for {
+		if _, err := io.ReadFull(r.r, frame[:]); err != nil {
+			if err == io.EOF {
+				return last, offset, nil
+			}
+			return last, offset, tailError(f, offset, active, err)
+		}
+		// Do not trust the length until the header is validated. A flipped
+		// length could otherwise hide complete frames behind a fake torn tail.
+		if crc32.Checksum(frame[:baseFrameSize], crcTable) != binary.BigEndian.Uint32(frame[baseFrameSize:]) {
+			return 0, 0, corrupt(f, offset, errors.New("record header checksum mismatch"))
+		}
+		length := binary.BigEndian.Uint32(frame[:4])
+		lsn := binary.BigEndian.Uint64(frame[8:16])
+		t := RecordType(frame[16])
+		if length > maxPayload || last == math.MaxUint64 || lsn != last+1 || !validType(t) {
+			return 0, 0, corrupt(f, offset, fmt.Errorf("invalid record header: length %d, LSN %d, type %d", length, lsn, t))
+		}
+		if n := int(length); cap(r.payload) < n {
+			r.payload = make([]byte, min(maxPayload, max(n, 2*cap(r.payload))))
+		}
+		payload := r.payload[:int(length)]
+		if _, err := io.ReadFull(r.r, payload); err != nil {
+			return last, offset, tailError(f, offset, active, err)
+		}
+		if checksum(frame[8:baseFrameSize], payload) != binary.BigEndian.Uint32(frame[4:8]) {
+			return 0, 0, corrupt(f, offset, errors.New("record checksum mismatch"))
+		}
+		if fn != nil && lsn > after {
+			if err := fn(Record{LSN: lsn, Type: t, Payload: payload}); err != nil {
+				return 0, 0, corrupt(f, offset, fmt.Errorf("apply LSN %d: %w", lsn, err))
+			}
+		}
+		last = lsn
+		offset += int64(len(frame)) + int64(length)
+	}
+}
+
+func tailError(f *os.File, offset int64, active bool, err error) error {
+	if !active || (err != io.EOF && err != io.ErrUnexpectedEOF) {
+		return corrupt(f, offset, err)
+	}
+	if err := f.Truncate(offset); err != nil {
+		return err
+	}
+	logger.Warn("truncated torn WAL tail", zap.String("path", f.Name()), zap.Int64("offset", offset))
+	return nil
+}
+
+func corrupt(f *os.File, offset int64, err error) error {
+	return fmt.Errorf("%w: %s at offset %d: %w", ErrCorrupt, f.Name(), offset, err)
 }
