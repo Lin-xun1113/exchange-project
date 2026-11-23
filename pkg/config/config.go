@@ -222,11 +222,16 @@ func Load() (*Config, error) {
 	cfg.GRPC.OrderGRPCAddr = getEnv("ORDER_GRPC_ADDR", "localhost:50052")
 	cfg.GRPC.MatchingGRPCAddr = getEnv("MATCHING_GRPC_ADDR", "localhost:50053")
 
+	seenSymbols := make(map[symbol.Pair]struct{})
 	for _, raw := range strings.Split(getEnv("SYMBOLS", "BTC/USDT,ETH/USDT"), ",") {
 		pair, err := symbol.Parse(strings.TrimSpace(raw))
 		if err != nil {
 			return nil, fmt.Errorf("SYMBOLS: %w", err)
 		}
+		if _, seen := seenSymbols[pair]; seen {
+			return nil, fmt.Errorf("SYMBOLS: duplicate market %q", pair)
+		}
+		seenSymbols[pair] = struct{}{}
 		cfg.Symbols = append(cfg.Symbols, pair.String())
 	}
 	cfg.Metrics.Addr = getEnv("METRICS_ADDR", ":9100")

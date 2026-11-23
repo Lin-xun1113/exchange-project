@@ -38,3 +38,10 @@ func TestLoadCanonicalizesSymbols(t *testing.T) {
 		t.Fatalf("symbols=%v rate limit enabled=%t", cfg.Symbols, cfg.RateLimit.Enabled)
 	}
 }
+
+func TestLoadRejectsDuplicateMarkets(t *testing.T) {
+	t.Setenv("SYMBOLS", "BTC/USDT,btc-usdt")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected configuration error for duplicate canonical market")
+	}
+}

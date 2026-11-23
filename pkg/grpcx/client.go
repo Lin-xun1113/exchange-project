@@ -11,6 +11,7 @@ import (
 func Dial(target string, extra ...grpc.UnaryClientInterceptor) (*grpc.ClientConn, error) {
 	return grpc.NewClient(target,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDisableRetry(), // Service callers choose which RPCs can be retried.
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 		grpc.WithUnaryInterceptor(UnaryClientRequestID()),
 		grpc.WithChainUnaryInterceptor(extra...),
