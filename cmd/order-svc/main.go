@@ -1,132 +1,171 @@
-// Package main Order Service 主入口
+// Package main runs the order service.
 package main
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
-	"github.com/linxun2025/exchange-project/api/gen/order/v1"
-	"github.com/linxun2025/exchange-project/internal/order/repository"
+	matchingpb "github.com/linxun2025/exchange-project/api/gen/matching/v1"
+	orderpb "github.com/linxun2025/exchange-project/api/gen/order/v1"
+	userpb "github.com/linxun2025/exchange-project/api/gen/user/v1"
 	"github.com/linxun2025/exchange-project/internal/order/server"
 	"github.com/linxun2025/exchange-project/internal/order/service"
-	orderrepo "github.com/linxun2025/exchange-project/internal/user/repository"
+	"github.com/linxun2025/exchange-project/internal/order/workflow"
 	"github.com/linxun2025/exchange-project/pkg/config"
 	"github.com/linxun2025/exchange-project/pkg/grpcx"
 	"github.com/linxun2025/exchange-project/pkg/logger"
+	"github.com/linxun2025/exchange-project/pkg/metrics"
 	"github.com/linxun2025/exchange-project/pkg/tracing"
-	"github.com/go-redis/redis/v8"
-	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
-	"go.uber.org/zap"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/health/grpc_health_v1"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
 
-// gRPC server performance options
-const (
-	grpcMaxConcurrentStreams = 100
-	grpcMaxRecvMsgSize      = 1024 * 1024 * 4  // 4MB
-	grpcMaxSendMsgSize      = 1024 * 1024 * 4  // 4MB
-	grpcReadBufferSize      = 32 * 1024        // 32KB
-	grpcWriteBufferSize     = 32 * 1024        // 32KB
-)
-
 func main() {
-	// 加载配置
-	cfg, err := config.Load("")
-	if err != nil {
-		logger.Fatal("failed to load config", logger.Err(err))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx); err != nil {
+		logger.Fatal("order service failed", logger.Err(err))
 	}
+}
 
-	// 初始化日志
+func run(ctx context.Context) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
 	if err := logger.Init(cfg.App.Environment); err != nil {
-		logger.Fatal("failed to init logger", logger.Err(err))
+		return fmt.Errorf("init logger: %w", err)
 	}
 	defer logger.Sync()
-
-	logger.Info("starting Order Service",
-		logger.S("name", cfg.App.Name),
-		logger.S("environment", cfg.App.Environment),
-	)
-
-	// 初始化 OpenTelemetry tracing
-	otelEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
-	tracingShutdown, err := tracing.Init(context.Background(), "order-svc", otelEndpoint)
+	concurrency, err := workerConcurrency(os.Getenv("WORKER_CONCURRENCY"))
+	if err != nil {
+		return err
+	}
+	shutdownTracing, err := tracing.Init(ctx, "order-svc", "")
 	if err != nil {
 		logger.Warn("failed to init tracing", logger.Err(err))
 	} else {
 		defer func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if err := tracingShutdown(ctx); err != nil {
-				logger.Error("failed to shutdown tracing", logger.Err(err))
+			if err := shutdownTracing(shutdownCtx); err != nil {
+				logger.Warn("failed to shut down tracing", logger.Err(err))
 			}
 		}()
 	}
 
-	// 初始化数据库连接
 	db, err := gorm.Open(mysql.Open(cfg.Database.DSN()), &gorm.Config{})
 	if err != nil {
-		logger.Fatal("failed to connect to database", zap.Error(err))
+		return fmt.Errorf("connect to database: %w", err)
 	}
-
-	// 初始化 Redis 连接
-	redisClient := redis.NewClient(&redis.Options{
-		Addr:     cfg.Redis.Addr(),
-		Password: cfg.Redis.Password,
-		DB:       cfg.Redis.DB,
-	})
-
-	// 初始化仓储层
-	orderRepo := repository.NewOrderRepository(db, redisClient)
-	userRepo := orderrepo.NewUserRepository(db, redisClient)
-
-	// 初始化服务层
-	orderSvc := service.NewOrderService(orderRepo, userRepo, redisClient)
-
-	// 创建 gRPC 服务器
-	lis, err := net.Listen("tcp", ":50052")
+	pool, err := db.DB()
 	if err != nil {
-		logger.Fatal("failed to listen", zap.Error(err))
+		return fmt.Errorf("configure database pool: %w", err)
 	}
+	defer pool.Close()
+	pool.SetMaxOpenConns(cfg.Database.MaxOpenConns)
+	pool.SetMaxIdleConns(cfg.Database.MaxIdleConns)
+	pool.SetConnMaxLifetime(time.Duration(cfg.Database.ConnMaxLife) * time.Minute)
 
-	grpcServer := grpc.NewServer(
-		grpc.StatsHandler(otelgrpc.NewServerHandler()),
-		grpc.ChainUnaryInterceptor(grpcx.UnaryServerRequestID()),
-		grpc.MaxConcurrentStreams(grpcMaxConcurrentStreams),
-		grpc.MaxRecvMsgSize(grpcMaxRecvMsgSize),
-		grpc.MaxSendMsgSize(grpcMaxSendMsgSize),
-		grpc.ReadBufferSize(grpcReadBufferSize),
-		grpc.WriteBufferSize(grpcWriteBufferSize),
-	)
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	m := metrics.NewOrder(reg)
+	clientMetrics := metrics.GRPCClientInterceptor(reg)
+	userConn, err := grpcx.Dial(cfg.GRPC.UserGRPCAddr, clientMetrics)
+	if err != nil {
+		return fmt.Errorf("dial user-svc: %w", err)
+	}
+	defer userConn.Close()
+	matchingConn, err := grpcx.Dial(cfg.GRPC.MatchingGRPCAddr, clientMetrics)
+	if err != nil {
+		return fmt.Errorf("dial matching-svc: %w", err)
+	}
+	defer matchingConn.Close()
 
-	// 注册 gRPC 服务
-	orderpb.RegisterOrderServiceServer(grpcServer, server.NewOrderServer(orderSvc))
+	const addr = ":50052"
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", addr, err)
+	}
+	defer listener.Close()
+	grpcServer, health := grpcx.NewServer(reg)
+	orderpb.RegisterOrderServiceServer(grpcServer, server.NewOrderServer(service.New(db, cfg.Symbols, m)))
+	worker := workflow.NewWorker(db,
+		workflow.Handlers(db, userpb.NewUserServiceClient(userConn), matchingpb.NewMatchingServiceClient(matchingConn)),
+		workflow.Options{Concurrency: concurrency}, m)
 
-	// 启用 gRPC 反射
-	reflection.Register(grpcServer)
+	workCtx, stopWork := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopWork()
+	metricsDone := make(chan error, 1)
+	go func() { metricsDone <- metrics.Serve(workCtx, cfg.Metrics.Addr, reg) }()
+	grpcDone := make(chan error, 1)
+	health.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+	go func() { grpcDone <- grpcServer.Serve(listener) }()
+	workerDone := make(chan error, 1)
+	go func() { workerDone <- worker.Run(workCtx) }()
+	logger.Info("order gRPC server started", logger.S("address", addr), logger.I("worker_concurrency", concurrency))
 
-	// 启动服务
-	go func() {
-		logger.Info("gRPC server starting", logger.S("address", ":50052"))
-		if err := grpcServer.Serve(lis); err != nil {
-			logger.Fatal("gRPC server failed to serve", zap.Error(err))
+	select {
+	case <-ctx.Done():
+	case err = <-grpcDone:
+		if err != nil {
+			err = fmt.Errorf("serve order RPCs: %w", err)
 		}
+	case err = <-metricsDone:
+		if err != nil {
+			err = fmt.Errorf("serve order metrics: %w", err)
+		}
+	}
+	health.SetServingStatus("", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
+	gracefulStop(grpcServer)
+	stopWork()
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	select {
+	case workerErr := <-workerDone:
+		if err == nil {
+			err = workerErr
+		}
+	case <-timer.C:
+		if err == nil {
+			err = fmt.Errorf("timed out draining order worker")
+		}
+	}
+	return err
+}
+
+func gracefulStop(srv *grpc.Server) {
+	done := make(chan struct{})
+	go func() {
+		srv.GracefulStop()
+		close(done)
 	}()
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		srv.Stop()
+	}
+}
 
-	// 等待中断信号
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	logger.Info("shutting down gRPC server...")
-
-	grpcServer.GracefulStop()
-
-	logger.Info("gRPC server stopped")
+func workerConcurrency(raw string) (int, error) {
+	if raw == "" {
+		return 4, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("WORKER_CONCURRENCY must be a positive integer")
+	}
+	return n, nil
 }

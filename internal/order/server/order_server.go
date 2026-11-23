@@ -1,210 +1,165 @@
-// Package server provides gRPC service implementation
+// Package server exposes the order gRPC service.
 package server
 
 import (
 	"context"
+	"fmt"
 
 	orderpb "github.com/linxun2025/exchange-project/api/gen/order/v1"
 	"github.com/linxun2025/exchange-project/internal/model"
 	"github.com/linxun2025/exchange-project/internal/order/service"
 	"github.com/linxun2025/exchange-project/pkg/logger"
-	"github.com/shopspring/decimal"
-	"go.uber.org/zap"
-	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// OrderServer order service gRPC server implementation
 type OrderServer struct {
 	orderpb.UnimplementedOrderServiceServer
 	svc *service.OrderService
 }
 
-// NewOrderServer creates order service gRPC server
 func NewOrderServer(svc *service.OrderService) *OrderServer {
-	return &OrderServer{
-		svc: svc,
-	}
+	return &OrderServer{svc: svc}
 }
 
-// CreateOrder creates order
 func (s *OrderServer) CreateOrder(ctx context.Context, req *orderpb.CreateOrderRequest) (*orderpb.CreateOrderResponse, error) {
-	price, err := decimal.NewFromString(req.Price)
+	side, valid := sides.toModel[req.GetSide()]
+	if !valid {
+		return nil, status.Error(codes.InvalidArgument, "invalid side")
+	}
+	kind, valid := orderTypes.toModel[req.GetType()]
+	if !valid {
+		return nil, status.Error(codes.InvalidArgument, "invalid order type")
+	}
+	o, replayed, err := s.svc.CreateOrder(ctx, service.CreateOrderRequest{
+		UserID: req.UserId, Symbol: req.Symbol, Side: side, Type: kind,
+		Price: req.Price, Quantity: req.Quantity, IdempotencyKey: req.IdempotencyKey,
+	})
 	if err != nil {
-		logger.WithContext(ctx).Error("invalid price", zap.String("price", req.Price))
 		return nil, err
 	}
-
-	quantity, err := decimal.NewFromString(req.Quantity)
+	order, err := modelToProtoOrder(ctx, o)
 	if err != nil {
-		logger.WithContext(ctx).Error("invalid quantity", zap.String("quantity", req.Quantity))
 		return nil, err
 	}
-
-	orderReq := &service.CreateOrderRequest{
-		UserID:         req.UserId,
-		Symbol:         req.Symbol,
-		Side:           model.OrderSide(req.Side.String()),
-		OrderType:      model.OrderType(req.OrderType.String()),
-		Price:          price,
-		Quantity:       quantity,
-		IdempotencyKey: req.IdempotencyKey,
-	}
-
-	order, err := s.svc.CreateOrder(ctx, orderReq)
-	if err != nil {
-		logger.WithContext(ctx).Error("CreateOrder failed",
-			logger.I64("user_id", req.UserId),
-			logger.S("symbol", req.Symbol),
-			zap.Error(err),
-		)
-		return nil, err
-	}
-
-	return &orderpb.CreateOrderResponse{
-		Order: modelToProtoOrder(order),
-	}, nil
+	return &orderpb.CreateOrderResponse{Order: order, Replayed: replayed}, nil
 }
 
-// CancelOrder cancels order
 func (s *OrderServer) CancelOrder(ctx context.Context, req *orderpb.CancelOrderRequest) (*orderpb.CancelOrderResponse, error) {
-	order, err := s.svc.CancelOrder(ctx, req.OrderId, req.UserId)
+	o, err := s.svc.CancelOrder(ctx, req.GetUserId(), req.GetOrderId())
 	if err != nil {
-		logger.WithContext(ctx).Error("CancelOrder failed",
-			logger.S("order_id", req.OrderId),
-			logger.I64("user_id", req.UserId),
-			zap.Error(err),
-		)
 		return nil, err
 	}
-
-	return &orderpb.CancelOrderResponse{
-		Success: true,
-		Order:   modelToProtoOrder(order),
-	}, nil
+	order, err := modelToProtoOrder(ctx, o)
+	if err != nil {
+		return nil, err
+	}
+	return &orderpb.CancelOrderResponse{Order: order}, nil
 }
 
-// GetOrder gets order
 func (s *OrderServer) GetOrder(ctx context.Context, req *orderpb.GetOrderRequest) (*orderpb.GetOrderResponse, error) {
-	order, err := s.svc.GetOrder(ctx, req.OrderId)
+	o, err := s.svc.GetOrder(ctx, req.GetUserId(), req.GetOrderId())
 	if err != nil {
-		logger.WithContext(ctx).Error("GetOrder failed", logger.S("order_id", req.OrderId), zap.Error(err))
 		return nil, err
 	}
-
-	return &orderpb.GetOrderResponse{
-		Order: modelToProtoOrder(order),
-	}, nil
+	order, err := modelToProtoOrder(ctx, o)
+	if err != nil {
+		return nil, err
+	}
+	return &orderpb.GetOrderResponse{Order: order}, nil
 }
 
-// ListOrders lists orders
 func (s *OrderServer) ListOrders(ctx context.Context, req *orderpb.ListOrdersRequest) (*orderpb.ListOrdersResponse, error) {
-	status := req.Status.String()
-	orders, total, err := s.svc.ListOrders(ctx, req.UserId, req.Symbol, status, int(req.Page), int(req.PageSize))
+	var filter model.OrderStatus
+	if req.GetStatus() != orderpb.OrderStatus_ORDER_STATUS_UNSPECIFIED {
+		var ok bool
+		filter, ok = orderStatuses.toModel[req.Status]
+		if !ok {
+			return nil, status.Error(codes.InvalidArgument, "invalid order status")
+		}
+	}
+	orders, next, err := s.svc.ListOrders(ctx, req.GetUserId(), req.GetSymbol(), filter, req.GetPageSize(), req.GetPageToken())
 	if err != nil {
-		logger.WithContext(ctx).Error("ListOrders failed",
-			logger.I64("user_id", req.UserId),
-			logger.S("symbol", req.Symbol),
-			zap.Error(err),
-		)
 		return nil, err
 	}
-
-	protoOrders := make([]*orderpb.Order, len(orders))
-	for i, order := range orders {
-		protoOrders[i] = modelToProtoOrder(order)
+	out := make([]*orderpb.Order, len(orders))
+	for i, o := range orders {
+		out[i], err = modelToProtoOrder(ctx, o)
+		if err != nil {
+			return nil, err
+		}
 	}
-
-	return &orderpb.ListOrdersResponse{
-		Orders:   protoOrders,
-		Total:    total,
-		Page:     req.Page,
-		PageSize: req.PageSize,
-	}, nil
+	return &orderpb.ListOrdersResponse{Orders: out, NextPageToken: next}, nil
 }
 
-// UpdateOrderStatus updates order status (called by matching engine)
-func (s *OrderServer) UpdateOrderStatus(ctx context.Context, req *orderpb.UpdateOrderStatusRequest) (*orderpb.UpdateOrderStatusResponse, error) {
-	filledQty, err := decimal.NewFromString(req.FilledQuantity)
-	if err != nil {
-		logger.WithContext(ctx).Error("invalid filled_quantity", zap.String("filled_quantity", req.FilledQuantity))
-		return nil, err
-	}
-
-	err = s.svc.UpdateFilledQuantity(ctx, req.OrderId, filledQty.InexactFloat64())
-	if err != nil {
-		logger.WithContext(ctx).Error("UpdateOrderStatus failed",
-			logger.S("order_id", req.OrderId),
-			zap.Error(err),
-		)
-		return nil, err
-	}
-
-	order, err := s.svc.GetOrder(ctx, req.OrderId)
+func (s *OrderServer) ListTrades(ctx context.Context, req *orderpb.ListTradesRequest) (*orderpb.ListTradesResponse, error) {
+	trades, next, err := s.svc.ListTrades(ctx, req.GetUserId(), req.GetSymbol(), req.GetPageSize(), req.GetPageToken())
 	if err != nil {
 		return nil, err
 	}
-
-	return &orderpb.UpdateOrderStatusResponse{
-		Success: true,
-		Order:   modelToProtoOrder(order),
-	}, nil
+	out := make([]*orderpb.Trade, len(trades))
+	for i, trade := range trades {
+		side, orderID := model.OrderSideSell, trade.SellOrderID
+		if req.UserId == trade.BuyUserID {
+			side, orderID = model.OrderSideBuy, trade.BuyOrderID
+		}
+		out[i] = &orderpb.Trade{
+			TradeId: trade.TradeID, Symbol: trade.Symbol, OrderId: orderID, Side: sides.toProto[side],
+			Price: trade.Price.String(), Quantity: trade.Quantity.String(), Maker: trade.TakerSide != side,
+			CreatedAt: timestamppb.New(trade.CreatedAt),
+		}
+	}
+	return &orderpb.ListTradesResponse{Trades: out, NextPageToken: next}, nil
 }
 
-// modelToProtoOrder converts model.Order to proto Order
-func modelToProtoOrder(order *model.Order) *orderpb.Order {
-	if order == nil {
-		return nil
+func modelToProtoOrder(ctx context.Context, o model.Order) (*orderpb.Order, error) {
+	side, sideOK := sides.toProto[o.Side]
+	kind, kindOK := orderTypes.toProto[o.Type]
+	state, stateOK := orderStatuses.toProto[o.Status]
+	if !sideOK || !kindOK || !stateOK {
+		logger.WithContext(ctx).Error("invalid persisted order enum", logger.S("order_id", o.OrderID),
+			logger.Err(fmt.Errorf("side=%q type=%q status=%q", o.Side, o.Type, o.Status)))
+		return nil, status.Error(codes.Internal, "invalid persisted order state")
 	}
-
-	var status orderpb.OrderStatus
-	switch order.Status {
-	case "pending":
-		status = orderpb.OrderStatus_ORDER_STATUS_PENDING
-	case "partial_filled":
-		status = orderpb.OrderStatus_ORDER_STATUS_PARTIAL_FILLED
-	case "filled":
-		status = orderpb.OrderStatus_ORDER_STATUS_FILLED
-	case "cancelled":
-		status = orderpb.OrderStatus_ORDER_STATUS_CANCELLED
-	case "rejected":
-		status = orderpb.OrderStatus_ORDER_STATUS_REJECTED
-	default:
-		status = orderpb.OrderStatus_ORDER_STATUS_UNSPECIFIED
-	}
-
-	var side orderpb.OrderSide
-	switch order.Side {
-	case "buy":
-		side = orderpb.OrderSide_ORDER_SIDE_BUY
-	case "sell":
-		side = orderpb.OrderSide_ORDER_SIDE_SELL
-	default:
-		side = orderpb.OrderSide_ORDER_SIDE_UNSPECIFIED
-	}
-
-	var orderType orderpb.OrderType
-	switch order.OrderType {
-	case "limit":
-		orderType = orderpb.OrderType_ORDER_TYPE_LIMIT
-	case "market":
-		orderType = orderpb.OrderType_ORDER_TYPE_MARKET
-	default:
-		orderType = orderpb.OrderType_ORDER_TYPE_UNSPECIFIED
-	}
-
 	return &orderpb.Order{
-		Id:                order.ID,
-		OrderId:           order.OrderID,
-		UserId:            order.UserID,
-		Symbol:            order.Symbol,
-		Side:              side,
-		OrderType:         orderType,
-		Price:             decimal.NewFromFloat(order.Price).String(),
-		Quantity:          decimal.NewFromFloat(order.Quantity).String(),
-		FilledQuantity:    decimal.NewFromFloat(order.FilledQuantity).String(),
-		RemainingQuantity: decimal.NewFromFloat(order.Quantity - order.FilledQuantity).String(),
-		Status:            status,
-		CreatedAt:         timestamppb.New(order.CreatedAt),
-		UpdatedAt:         timestamppb.New(order.UpdatedAt),
-	}
+		OrderId: o.OrderID, UserId: o.UserID, Symbol: o.Symbol, Side: side, Type: kind,
+		Price: o.Price.String(), Quantity: o.Quantity.String(), FilledQuantity: o.FilledQuantity.String(), Status: state,
+		RejectReason: o.RejectReason, CancelRequested: o.CancelRequested,
+		CreatedAt: timestamppb.New(o.CreatedAt), UpdatedAt: timestamppb.New(o.UpdatedAt),
+	}, nil
 }
+
+type enumMap[P comparable, M comparable] struct {
+	toModel map[P]M
+	toProto map[M]P
+}
+
+func enumMapping[P comparable, M comparable](protoToModel map[P]M) enumMap[P, M] {
+	modelToProto := make(map[M]P, len(protoToModel))
+	for p, m := range protoToModel {
+		modelToProto[m] = p
+	}
+	return enumMap[P, M]{toModel: protoToModel, toProto: modelToProto}
+}
+
+var sides = enumMapping(map[orderpb.OrderSide]model.OrderSide{
+	orderpb.OrderSide_ORDER_SIDE_BUY:  model.OrderSideBuy,
+	orderpb.OrderSide_ORDER_SIDE_SELL: model.OrderSideSell,
+})
+
+var orderTypes = enumMapping(map[orderpb.OrderType]model.OrderType{
+	orderpb.OrderType_ORDER_TYPE_LIMIT:  model.OrderTypeLimit,
+	orderpb.OrderType_ORDER_TYPE_MARKET: model.OrderTypeMarket,
+	orderpb.OrderType_ORDER_TYPE_IOC:    model.OrderTypeIOC,
+	orderpb.OrderType_ORDER_TYPE_FOK:    model.OrderTypeFOK,
+})
+
+var orderStatuses = enumMapping(map[orderpb.OrderStatus]model.OrderStatus{
+	orderpb.OrderStatus_ORDER_STATUS_PENDING:        model.OrderStatusPending,
+	orderpb.OrderStatus_ORDER_STATUS_OPEN:           model.OrderStatusOpen,
+	orderpb.OrderStatus_ORDER_STATUS_PARTIAL_FILLED: model.OrderStatusPartialFilled,
+	orderpb.OrderStatus_ORDER_STATUS_FILLED:         model.OrderStatusFilled,
+	orderpb.OrderStatus_ORDER_STATUS_CANCELLED:      model.OrderStatusCancelled,
+	orderpb.OrderStatus_ORDER_STATUS_REJECTED:       model.OrderStatusRejected,
+})

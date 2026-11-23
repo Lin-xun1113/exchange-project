@@ -1,193 +1,97 @@
-// Package repository 提供订单仓储层实现
+// Package repository stores orders and trades in MySQL.
 package repository
 
 import (
-	"context"
-	"encoding/json"
-	"fmt"
+	"database/sql"
 	"time"
 
-	"github.com/go-redis/redis/v8"
 	"github.com/linxun2025/exchange-project/internal/model"
-	"github.com/linxun2025/exchange-project/pkg/errors"
+	"github.com/linxun2025/exchange-project/pkg/dberr"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
-// OrderRepository 订单仓储
-type OrderRepository struct {
-	db    *gorm.DB
-	redis *redis.Client
+func CreateOrder(tx *gorm.DB, o *model.Order) error {
+	return tx.Create(o).Error
 }
 
-// NewOrderRepository 创建订单仓储
-func NewOrderRepository(db *gorm.DB, redisClient *redis.Client) *OrderRepository {
-	return &OrderRepository{
-		db:    db,
-		redis: redisClient,
-	}
+func GetOrderForUpdate(tx *gorm.DB, orderID string) (model.Order, error) {
+	var o model.Order
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("order_id = ?", orderID).Take(&o).Error
+	return o, err
 }
 
-// Create 创建订单
-func (r *OrderRepository) Create(ctx context.Context, order *model.Order) error {
-	result := r.db.WithContext(ctx).Create(order)
-	return result.Error
+func GetOrder(db *gorm.DB, userID int64, orderID string) (model.Order, error) {
+	var o model.Order
+	err := db.Where("user_id = ? AND order_id = ?", userID, orderID).Take(&o).Error
+	return o, err
 }
 
-// GetByID 根据ID获取订单
-func (r *OrderRepository) GetByID(ctx context.Context, id int64) (*model.Order, error) {
-	var order model.Order
-	result := r.db.WithContext(ctx).First(&order, id)
-	if result.Error != nil {
-		if result.Error == gorm.ErrRecordNotFound {
-			return nil, errors.ErrOrderNotFound
-		}
-		return nil, result.Error
-	}
-	return &order, nil
+func FindByIdempotencyKey(db *gorm.DB, userID int64, key string) (model.Order, error) {
+	var o model.Order
+	err := db.Where("user_id = ? AND idempotency_key = ?", userID, key).Take(&o).Error
+	return o, err
 }
 
-// GetByOrderID 根据订单ID获取订单
-func (r *OrderRepository) GetByOrderID(ctx context.Context, orderID string) (*model.Order, error) {
-	// Cache-Aside: 先查缓存
-	cacheKey := fmt.Sprintf("order:%s", orderID)
-	cached, err := r.redis.Get(ctx, cacheKey).Result()
-	if err == nil {
-		var order model.Order
-		if json.Unmarshal([]byte(cached), &order) == nil {
-			return &order, nil
-		}
-	}
-
-	var order model.Order
-	result := r.db.WithContext(ctx).Where("order_id = ?", orderID).First(&order)
-	if result.Error != nil {
-		if result.Error == gorm.ErrRecordNotFound {
-			return nil, errors.ErrOrderNotFound
-		}
-		return nil, result.Error
-	}
-
-	// 写入缓存
-	if data, err := json.Marshal(order); err == nil {
-		r.redis.Set(ctx, cacheKey, data, 5*time.Minute)
-	}
-
-	return &order, nil
+func SaveOrder(tx *gorm.DB, o *model.Order) error {
+	return tx.Model(o).Select("filled_quantity", "closed_quantity", "status", "reject_reason", "cancel_requested", "updated_at").Updates(o).Error
 }
 
-// GetByIdempotencyKey 根据幂等键获取订单
-func (r *OrderRepository) GetByIdempotencyKey(ctx context.Context, key string) (*model.Order, error) {
-	var order model.Order
-	result := r.db.WithContext(ctx).Where("idempotency_key = ?", key).First(&order)
-	if result.Error != nil {
-		if result.Error == gorm.ErrRecordNotFound {
-			return nil, nil
-		}
-		return nil, result.Error
-	}
-	return &order, nil
-}
-
-// Update 更新订单
-func (r *OrderRepository) Update(ctx context.Context, order *model.Order) error {
-	result := r.db.WithContext(ctx).Save(order)
-	if result.Error != nil {
-		return result.Error
-	}
-
-	// 清除缓存
-	cacheKey := fmt.Sprintf("order:%s", order.OrderID)
-	r.redis.Del(ctx, cacheKey)
-
-	return nil
-}
-
-// UpdateStatus 更新订单状态
-func (r *OrderRepository) UpdateStatus(ctx context.Context, orderID string, status model.OrderStatus, filledQty float64) error {
-	result := r.db.WithContext(ctx).Model(&model.Order{}).
-		Where("order_id = ?", orderID).
-		Updates(map[string]interface{}{
-			"status":          status,
-			"filled_quantity": filledQty,
-		})
-	if result.Error != nil {
-		return result.Error
-	}
-
-	// 清除缓存
-	cacheKey := fmt.Sprintf("order:%s", orderID)
-	r.redis.Del(ctx, cacheKey)
-
-	return nil
-}
-
-// ListByUserID 列出用户的订单
-func (r *OrderRepository) ListByUserID(ctx context.Context, userID int64, symbol string, status string, page, pageSize int) ([]*model.Order, int64, error) {
-	query := r.db.WithContext(ctx).Model(&model.Order{}).Where("user_id = ?", userID)
-
-	if symbol != "" {
-		query = query.Where("symbol = ?", symbol)
-	}
+func ListOrders(db *gorm.DB, userID int64, symbol string, status model.OrderStatus, beforeID int64, limit int) ([]model.Order, error) {
+	q := db.Where("user_id = ?", userID)
 	if status != "" {
-		query = query.Where("status = ?", status)
+		q = q.Where("status = ?", status)
 	}
-
-	// 统计总数
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-
-	// 分页查询
-	offset := (page - 1) * pageSize
-	var orders []*model.Order
-	result := query.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&orders)
-	if result.Error != nil {
-		return nil, 0, result.Error
-	}
-
-	return orders, total, nil
+	var orders []model.Order
+	err := page(q, symbol, beforeID, limit).Find(&orders).Error
+	return orders, err
 }
 
-// CancelOrder 取消订单
-func (r *OrderRepository) CancelOrder(ctx context.Context, orderID string, userID int64) error {
-	result := r.db.WithContext(ctx).Model(&model.Order{}).
-		Where("order_id = ? AND user_id = ? AND status IN ?", orderID, userID, []string{"pending", "partial_filled"}).
-		Update("status", model.OrderStatusCancelled)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return errors.ErrOrderInvalid
-	}
-
-	// 清除缓存
-	cacheKey := fmt.Sprintf("order:%s", orderID)
-	r.redis.Del(ctx, cacheKey)
-
-	return nil
+func InsertTrade(tx *gorm.DB, t *model.Trade) (bool, error) {
+	// MySQL implements DoNothing as a no-op update of the primary key.
+	// Our connections use the default changed-rows semantics.
+	res := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(t)
+	return res.RowsAffected == 1, res.Error
 }
 
-// GetPendingOrders 获取待撮合订单
-func (r *OrderRepository) GetPendingOrders(ctx context.Context, symbol string, limit int) ([]*model.Order, error) {
-	var orders []*model.Order
-	result := r.db.WithContext(ctx).
-		Where("symbol = ? AND status = ?", symbol, model.OrderStatusPending).
-		Order("price DESC, created_at ASC").
-		Limit(limit).
-		Find(&orders)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return orders, nil
+func GetTrade(tx *gorm.DB, tradeID string) (model.Trade, error) {
+	var t model.Trade
+	err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("trade_id = ?", tradeID).Take(&t).Error
+	return t, err
 }
 
-// Upsert 幂等插入或更新
-func (r *OrderRepository) Upsert(ctx context.Context, order *model.Order) error {
-	result := r.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "idempotency_key"}},
-		DoUpdates: clause.AssignmentColumns([]string{"filled_quantity", "status", "updated_at"}),
-	}).Create(order)
-	return result.Error
+func ListTrades(db *gorm.DB, userID int64, symbol string, beforeID int64, limit int) ([]model.Trade, error) {
+	q := db.Where("(buy_user_id = ? OR sell_user_id = ?)", userID, userID)
+	var trades []model.Trade
+	err := page(q, symbol, beforeID, limit).Find(&trades).Error
+	return trades, err
+}
+
+func page(q *gorm.DB, symbol string, beforeID int64, limit int) *gorm.DB {
+	if symbol != "" {
+		q = q.Where("symbol = ?", symbol)
+	}
+	if beforeID > 0 {
+		q = q.Where("id < ?", beforeID)
+	}
+	return q.Order("id DESC").Limit(limit)
+}
+
+// Transaction retries MySQL lock conflicts. fn may run more than once and
+// must keep all side effects in the transaction.
+func Transaction(db *gorm.DB, fn func(*gorm.DB) error, opts ...*sql.TxOptions) error {
+	ctx := db.Statement.Context
+	for attempt := 0; ; attempt++ {
+		err := db.Transaction(fn, opts...)
+		if !dberr.IsDeadlock(err) || attempt == 2 {
+			return err
+		}
+		timer := time.NewTimer(10 * time.Millisecond << attempt)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }

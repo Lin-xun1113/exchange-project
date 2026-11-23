@@ -1,239 +1,196 @@
-// Package service 提供订单服务层实现
+// Package service implements the order lifecycle and queries.
 package service
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"time"
+	"errors"
+	"regexp"
+	"unicode/utf8"
 
-	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 	"github.com/linxun2025/exchange-project/internal/model"
 	"github.com/linxun2025/exchange-project/internal/order/repository"
-	userrepo "github.com/linxun2025/exchange-project/internal/user/repository"
-	"github.com/linxun2025/exchange-project/pkg/errors"
+	"github.com/linxun2025/exchange-project/internal/order/workflow"
+	"github.com/linxun2025/exchange-project/pkg/dberr"
 	"github.com/linxun2025/exchange-project/pkg/logger"
 	"github.com/linxun2025/exchange-project/pkg/metrics"
+	"github.com/linxun2025/exchange-project/pkg/money"
+	"github.com/linxun2025/exchange-project/pkg/symbol"
 	"github.com/shopspring/decimal"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"gorm.io/gorm"
 )
 
-// OrderService 订单服务
+var idempotencyKey = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
 type OrderService struct {
-	orderRepo *repository.OrderRepository
-	userRepo  *userrepo.UserRepository
-	redis     *redis.Client
+	db      *gorm.DB
+	allowed func(symbol.Pair) bool
+	metrics *metrics.Order
 }
 
-// NewOrderService 创建订单服务
-func NewOrderService(orderRepo *repository.OrderRepository, userRepo *userrepo.UserRepository, redisClient *redis.Client) *OrderService {
-	return &OrderService{
-		orderRepo: orderRepo,
-		userRepo:  userRepo,
-		redis:     redisClient,
-	}
+func New(db *gorm.DB, symbols []string, m *metrics.Order) *OrderService {
+	return &OrderService{db: db, allowed: symbol.Allowed(symbols), metrics: m}
 }
 
-// CreateOrderRequest 创建订单请求
 type CreateOrderRequest struct {
 	UserID         int64
 	Symbol         string
 	Side           model.OrderSide
-	OrderType      model.OrderType
-	Price          decimal.Decimal
-	Quantity       decimal.Decimal
+	Type           model.OrderType
+	Price          string
+	Quantity       string
 	IdempotencyKey string
 }
 
-// CreateOrder 创建订单（幂等）
-func (s *OrderService) CreateOrder(ctx context.Context, req *CreateOrderRequest) (*model.Order, error) {
-	// 1. 幂等检查
-	if req.IdempotencyKey != "" {
-		idempotencyKey := fmt.Sprintf("idempotency:order:%s", req.IdempotencyKey)
-
-		existing, err := s.redis.Get(ctx, idempotencyKey).Result()
-		if err == nil {
-			var order model.Order
-			if err := json.Unmarshal([]byte(existing), &order); err == nil {
-				logger.Info("idempotent request, returning cached order",
-					logger.S("idempotency_key", req.IdempotencyKey),
-					logger.S("order_id", order.OrderID),
-				)
-				return &order, nil
-			}
-		}
-
-		existingOrder, err := s.orderRepo.GetByIdempotencyKey(ctx, req.IdempotencyKey)
-		if err == nil && existingOrder != nil {
-			return existingOrder, nil
-		}
-	}
-
-	// 2. 分布式锁防止并发重复创建
-	lockKey := fmt.Sprintf("lock:order:create:%d:%s", req.UserID, req.Symbol)
-	locked, err := s.redis.SetNX(ctx, lockKey, "1", 10*time.Second).Result()
-	if err != nil || !locked {
-		return nil, errors.New(errors.CodeConflict, "concurrent request")
-	}
-	defer s.redis.Del(ctx, lockKey)
-
-	// 3. 检查余额
-	available, _, err := s.userRepo.GetBalance(ctx, req.UserID)
+func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderRequest) (o model.Order, replayed bool, err error) {
+	o, err = s.validateCreate(req)
 	if err != nil {
-		return nil, err
+		return model.Order{}, false, err
 	}
-
-	freezeAmount := req.Price.Mul(req.Quantity)
-	if req.Side == model.OrderSideBuy && available < freezeAmount.InexactFloat64() {
-		return nil, errors.ErrBalance
-	}
-
-	// 4. 冻结余额
-	if err := s.userRepo.FreezeAmount(ctx, req.UserID, freezeAmount.InexactFloat64()); err != nil {
-		return nil, err
-	}
-
-	// 5. 创建订单
-	orderID := generateOrderID()
-	order := &model.Order{
-		OrderID:        orderID,
-		IdempotencyKey: req.IdempotencyKey,
-		UserID:         req.UserID,
-		Symbol:         req.Symbol,
-		Side:           string(req.Side),
-		OrderType:      string(req.OrderType),
-		Price:          req.Price.InexactFloat64(),
-		Quantity:        req.Quantity.InexactFloat64(),
-		FilledQuantity: 0,
-		Status:         string(model.OrderStatusPending),
-	}
-
-	if err := s.orderRepo.Create(ctx, order); err != nil {
-		s.userRepo.UnfreezeAmount(ctx, req.UserID, freezeAmount.InexactFloat64())
-		return nil, err
-	}
-
-	// 6. 写入幂等缓存
-	if req.IdempotencyKey != "" {
-		idempotencyKey := fmt.Sprintf("idempotency:order:%s", req.IdempotencyKey)
-		if data, err := json.Marshal(order); err == nil {
-			s.redis.Set(ctx, idempotencyKey, data, 24*time.Hour)
+	o.OrderID = uuid.Must(uuid.NewV7()).String()
+	db := s.db.WithContext(ctx)
+	err = repository.Transaction(db, func(tx *gorm.DB) error {
+		o.ID = 0 // Let MySQL allocate the ID on each transaction attempt.
+		if err := repository.CreateOrder(tx, &o); err != nil {
+			return err
 		}
+		return workflow.Enqueue(tx, o.OrderID, workflow.FreezeStep, nil)
+	})
+	if dberr.IsDuplicate(err) {
+		previous, lookupErr := repository.FindByIdempotencyKey(db, req.UserID, req.IdempotencyKey)
+		if lookupErr != nil {
+			return model.Order{}, false, databaseError(ctx, "read order replay", lookupErr)
+		}
+		if previous.Symbol != o.Symbol || previous.Side != o.Side || previous.Type != o.Type ||
+			!previous.Price.Equal(o.Price) || !previous.Quantity.Equal(o.Quantity) {
+			return model.Order{}, false, status.Error(codes.AlreadyExists, "idempotency key reused with different parameters")
+		}
+		return previous, true, nil
 	}
-
-	logger.Info("order created",
-		logger.S("order_id", orderID),
-		logger.I64("user_id", req.UserID),
-		logger.S("symbol", req.Symbol),
-		logger.S("side", string(req.Side)),
-		logger.S("price", req.Price.String()),
-		logger.S("quantity", req.Quantity.String()),
-	)
-
-	metrics.GetMetrics().RecordOrderCreated(string(req.Side), req.Symbol)
-
-	return order, nil
+	if err != nil {
+		return model.Order{}, false, databaseError(ctx, "create order", err)
+	}
+	if s.metrics != nil {
+		s.metrics.OrderCreated(o.Symbol, string(o.Side))
+	}
+	return o, false, nil
 }
 
-// CancelOrder 取消订单
-func (s *OrderService) CancelOrder(ctx context.Context, orderID string, userID int64) (*model.Order, error) {
-	// 分布式锁防止并发取消
-	lockKey := fmt.Sprintf("lock:order:cancel:%s", orderID)
-	locked, err := s.redis.SetNX(ctx, lockKey, "1", 10*time.Second).Result()
-	if err != nil || !locked {
-		return nil, errors.New(errors.CodeConflict, "concurrent request")
+func (s *OrderService) validateCreate(req CreateOrderRequest) (model.Order, error) {
+	if req.UserID <= 0 || !idempotencyKey.MatchString(req.IdempotencyKey) {
+		return model.Order{}, status.Error(codes.InvalidArgument, "positive user ID and valid idempotency key required")
 	}
-	defer s.redis.Del(ctx, lockKey)
-
-	order, err := s.orderRepo.GetByOrderID(ctx, orderID)
+	pair, err := symbol.Parse(req.Symbol)
+	if err != nil || !s.allowed(pair) {
+		return model.Order{}, status.Error(codes.InvalidArgument, "unsupported symbol")
+	}
+	if req.Side != model.OrderSideBuy && req.Side != model.OrderSideSell {
+		return model.Order{}, status.Error(codes.InvalidArgument, "invalid side")
+	}
+	var price decimal.Decimal
+	switch req.Type {
+	case model.OrderTypeMarket:
+		if req.Side == model.OrderSideBuy {
+			return model.Order{}, status.Error(codes.InvalidArgument, "market buy not supported")
+		}
+		if req.Price != "" && req.Price != "0" {
+			return model.Order{}, status.Error(codes.InvalidArgument, "market sell price must be empty or zero")
+		}
+		price = decimal.Zero
+	case model.OrderTypeLimit, model.OrderTypeIOC, model.OrderTypeFOK:
+		price, err = positiveTicks(req.Price)
+		if err != nil {
+			return model.Order{}, status.Error(codes.InvalidArgument, "invalid price or price outside tick range")
+		}
+	default:
+		return model.Order{}, status.Error(codes.InvalidArgument, "invalid order type")
+	}
+	quantity, err := positiveTicks(req.Quantity)
 	if err != nil {
-		return nil, err
+		return model.Order{}, status.Error(codes.InvalidArgument, "invalid quantity or quantity outside tick range")
 	}
-
-	if order.UserID != userID {
-		return nil, errors.ErrForbidden
-	}
-
-	if order.Status != string(model.OrderStatusPending) && order.Status != string(model.OrderStatusPartialFilled) {
-		return nil, errors.ErrOrderInvalid
-	}
-
-	remainingQty := order.Quantity - order.FilledQuantity
-	if remainingQty > 0 {
-		freezeAmount := decimal.NewFromFloat(order.Price).Mul(decimal.NewFromFloat(remainingQty))
-		if err := s.userRepo.UnfreezeAmount(ctx, userID, freezeAmount.InexactFloat64()); err != nil {
-			return nil, err
+	asset, amount := pair.Base, quantity
+	if req.Side == model.OrderSideBuy {
+		asset, amount = pair.Quote, price.Mul(quantity)
+		// A valid tick pair can still overflow the 18 integer digits allowed
+		// by DECIMAL(36,18). Keep the full precision of the product.
+		if amount.Exponent() < -18 || int64(amount.NumDigits())+int64(amount.Exponent()) > 18 {
+			return model.Order{}, status.Error(codes.InvalidArgument, "buy notional exceeds DECIMAL(36,18) range")
 		}
 	}
-
-	if err := s.orderRepo.UpdateStatus(ctx, orderID, model.OrderStatusCancelled, order.FilledQuantity); err != nil {
-		return nil, err
-	}
-
-	order.Status = string(model.OrderStatusCancelled)
-	logger.Info("order cancelled",
-		logger.S("order_id", orderID),
-		logger.I64("user_id", userID),
-	)
-
-	metrics.GetMetrics().RecordOrderCancelled(order.Side, order.Symbol)
-
-	return order, nil
+	return model.Order{
+		UserID: req.UserID, IdempotencyKey: req.IdempotencyKey, Symbol: pair.String(), Side: req.Side, Type: req.Type,
+		Price: price, Quantity: quantity, FrozenAsset: asset, FrozenAmount: amount, Status: model.OrderStatusPending,
+	}, nil
 }
 
-// GetOrder 获取订单
-func (s *OrderService) GetOrder(ctx context.Context, orderID string) (*model.Order, error) {
-	return s.orderRepo.GetByOrderID(ctx, orderID)
-}
-
-// ListOrders 列出订单
-func (s *OrderService) ListOrders(ctx context.Context, userID int64, symbol, status string, page, pageSize int) ([]*model.Order, int64, error) {
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 20
-	}
-
-	return s.orderRepo.ListByUserID(ctx, userID, symbol, status, page, pageSize)
-}
-
-// UpdateFilledQuantity 更新成交数量
-func (s *OrderService) UpdateFilledQuantity(ctx context.Context, orderID string, filledQty float64) error {
-	order, err := s.orderRepo.GetByOrderID(ctx, orderID)
+func positiveTicks(raw string) (decimal.Decimal, error) {
+	value, err := money.ParsePositive(raw)
 	if err != nil {
-		return err
+		return decimal.Zero, err
 	}
+	_, err = money.ToTicks(value)
+	return value, err
+}
 
-	var status model.OrderStatus
-	if filledQty >= order.Quantity {
-		status = model.OrderStatusFilled
-	} else {
-		status = model.OrderStatusPartialFilled
+func (s *OrderService) CancelOrder(ctx context.Context, userID int64, orderID string) (model.Order, error) {
+	if err := validateOrderRef(userID, orderID); err != nil {
+		return model.Order{}, err
 	}
-
-	err = s.orderRepo.UpdateStatus(ctx, orderID, status, filledQty)
+	var o model.Order
+	err := repository.Transaction(s.db.WithContext(ctx), func(tx *gorm.DB) error {
+		current, err := repository.GetOrderForUpdate(tx, orderID)
+		if err != nil {
+			return err
+		}
+		if current.UserID != userID {
+			return gorm.ErrRecordNotFound
+		}
+		o = current
+		if o.Status.IsFinal() {
+			return status.Error(codes.FailedPrecondition, "order already final")
+		}
+		if o.CancelRequested {
+			return nil
+		}
+		o.CancelRequested = true
+		if err := repository.SaveOrder(tx, &o); err != nil {
+			return err
+		}
+		if o.Status == model.OrderStatusOpen || o.Status == model.OrderStatusPartialFilled {
+			return workflow.Enqueue(tx, o.OrderID, workflow.CancelStep, nil)
+		}
+		return nil
+	})
 	if err != nil {
-		return err
+		return model.Order{}, orderError(ctx, "cancel order", err)
 	}
+	return o, nil
+}
 
-	if order.Quantity > 0 {
-		fillRate := filledQty / order.Quantity
-		metrics.GetMetrics().RecordOrderFillRate(order.Side, order.Symbol, fillRate)
+func validateOrderRef(userID int64, orderID string) error {
+	if userID <= 0 || orderID == "" || len(orderID) > 64 || !utf8.ValidString(orderID) {
+		return status.Error(codes.InvalidArgument, "positive user ID and valid order ID required")
 	}
-
 	return nil
 }
 
-// RecordOrderFillRate 记录订单成交率（供外部调用）
-func (s *OrderService) RecordOrderFillRate(orderID string, filledQty, totalQty float64) {
-	if totalQty > 0 {
-		fillRate := filledQty / totalQty
-		metrics.GetMetrics().RecordOrderFillRate("unknown", "unknown", fillRate)
+func orderError(ctx context.Context, operation string, err error) error {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return status.Error(codes.NotFound, "order not found")
 	}
+	if _, ok := status.FromError(err); ok {
+		return err
+	}
+	return databaseError(ctx, operation, err)
 }
 
-// generateOrderID 生成订单ID
-func generateOrderID() string {
-	return fmt.Sprintf("ORD%s%s", time.Now().Format("20060102150405"), uuid.New().String()[:8])
+func databaseError(ctx context.Context, operation string, err error) error {
+	if ctx.Err() != nil {
+		return status.FromContextError(ctx.Err()).Err()
+	}
+	logger.WithContext(ctx).Error(operation, logger.Err(err))
+	return status.Error(codes.Unavailable, "order database unavailable")
 }
