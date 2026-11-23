@@ -4,6 +4,7 @@ package logger
 import (
 	"context"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,7 +24,7 @@ const (
 )
 
 // Logger 全局日志实例
-var log *zap.Logger
+var log atomic.Pointer[zap.Logger]
 
 // Init 初始化日志
 func Init(environment string) error {
@@ -41,28 +42,30 @@ func Init(environment string) error {
 	}
 	cfg.EncoderConfig.StacktraceKey = ""
 
-	var err error
-	log, err = cfg.Build(zap.AddCallerSkip(1))
+	l, err := cfg.Build(zap.AddCallerSkip(1))
 	if err != nil {
 		return err
 	}
 
+	log.Store(l)
 	return nil
 }
 
 // Sync 刷新日志缓冲
 func Sync() {
-	if log != nil {
-		log.Sync()
+	if l := log.Load(); l != nil {
+		l.Sync()
 	}
 }
 
 // GetLogger 获取日志实例
 func GetLogger() *zap.Logger {
-	if log == nil {
-		log, _ = zap.NewProduction()
+	if l := log.Load(); l != nil {
+		return l
 	}
-	return log
+	l, _ := zap.NewProduction()
+	log.CompareAndSwap(nil, l)
+	return log.Load()
 }
 
 // WithContext 返回带上下文的日志

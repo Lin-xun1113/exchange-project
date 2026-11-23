@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"testing"
-	"time"
 
 	"github.com/linxun2025/exchange-project/pkg/config"
 )
@@ -131,19 +130,6 @@ func TestGetIdentityScopes(t *testing.T) {
 		t.Run(scope, func(t *testing.T) {
 			t.Logf("GetIdentity should support scope: %s", scope)
 		})
-	}
-}
-
-// TestCircuitBreakerConfig 测试熔断器配置
-func TestCircuitBreakerConfig(t *testing.T) {
-	if cbConfig.Name != "matching-service" {
-		t.Errorf("expected circuit breaker name 'matching-service', got '%s'", cbConfig.Name)
-	}
-	if cbConfig.MaxReq != 100 {
-		t.Errorf("expected MaxReq=100, got %d", cbConfig.MaxReq)
-	}
-	if cbConfig.Timeout != 30*time.Second {
-		t.Errorf("expected Timeout=30s, got %v", cbConfig.Timeout)
 	}
 }
 

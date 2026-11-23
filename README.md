@@ -32,10 +32,10 @@
 - [x] Cache-Aside 缓存模式 (5min TTL)
 - [x] Redis 分布式锁 (SetNX)
 - [x] Redis Stream 事件分发 (Consumer Group)
-- [x] Worker Pool 并发处理 (背压策略)
+- [x] Worker Pool 并发处理（队列满时拒绝新任务，队列深度指标不包含正在执行的任务）
 - [x] gRPC 拦截器 (超时/重试/熔断)
 - [x] 统一错误码
-- [x] 结构化日志 (request_id 链路)
+- [x] 结构化日志（request_id 链路，支持并发首次调用）
 - [x] **Saga 编排模式** - 订单创建 Saga 编排器
 - [x] **事务性 Outbox 模式** - 可靠消息投递, 指数退避 + jitter 重试
 - [x] **分布式限流** - Sliding Window 算法 + Redis

@@ -88,7 +88,7 @@ func (wp *WorkerPool) start() {
 	logger.Info("worker pool started",
 		logger.S("name", wp.name),
 		logger.I("workers", wp.workers),
-		logger.I("queue_size", wp.workers*2),
+		logger.I("queue_size", cap(wp.taskQueue)),
 	)
 }
 
@@ -141,15 +141,10 @@ func (wp *WorkerPool) Submit(task Task) error {
 	case wp.taskQueue <- task:
 		wp.metrics.mu.Lock()
 		wp.metrics.SubmittedTasks++
-		wp.metrics.QueuedTasks++
 		wp.metrics.mu.Unlock()
 		return nil
 	default:
 		// 队列已满
-		wp.metrics.mu.Lock()
-		wp.metrics.QueuedTasks--
-		wp.metrics.mu.Unlock()
-
 		logger.Warn("task queue is full",
 			logger.S("name", wp.name),
 			logger.I("queue_size", len(wp.taskQueue)),
@@ -170,14 +165,9 @@ func (wp *WorkerPool) SubmitWithContext(ctx context.Context, task Task) error {
 	case wp.taskQueue <- task:
 		wp.metrics.mu.Lock()
 		wp.metrics.SubmittedTasks++
-		wp.metrics.QueuedTasks++
 		wp.metrics.mu.Unlock()
 		return nil
 	default:
-		wp.metrics.mu.Lock()
-		wp.metrics.QueuedTasks--
-		wp.metrics.mu.Unlock()
-
 		logger.Warn("task queue is full",
 			logger.S("name", wp.name),
 			logger.I("queue_size", len(wp.taskQueue)),

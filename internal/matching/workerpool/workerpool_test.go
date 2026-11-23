@@ -95,19 +95,29 @@ func TestWorkerPool_QueueFull(t *testing.T) {
 	})
 	defer wp.Shutdown()
 
-	// 使用慢任务填满队列
-	slowTask := func() error {
-		time.Sleep(1 * time.Second)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release)
+	if err := wp.Submit(func() error {
+		close(started)
+		<-release
 		return nil
+	}); err != nil {
+		t.Fatalf("submit blocking task: %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not start the blocking task")
 	}
 
-	// 填满队列
-	wp.Submit(slowTask)
-	wp.Submit(slowTask)
-
-	// 队列已满，新任务应该被拒绝
-	err := wp.Submit(slowTask)
-	assert.Error(t, err)
+	task := func() error { return nil }
+	for range 2 {
+		if err := wp.Submit(task); err != nil {
+			t.Fatalf("fill queue: %v", err)
+		}
+	}
+	assert.ErrorIs(t, wp.Submit(task), workerpool.ErrQueueFull)
 }
 
 // TestWorkerPool_Metrics 测试性能指标
@@ -142,21 +152,26 @@ func TestWorkerPool_ConcurrentSubmit(t *testing.T) {
 	defer wp.Shutdown()
 
 	var count int32
-	var wg sync.WaitGroup
+	var submissions, tasks sync.WaitGroup
+	tasks.Add(100)
 
 	for i := 0; i < 100; i++ {
-		wg.Add(1)
+		submissions.Add(1)
 		go func() {
-			defer wg.Done()
-			wp.Submit(func() error {
+			defer submissions.Done()
+			if err := wp.Submit(func() error {
+				defer tasks.Done()
 				atomic.AddInt32(&count, 1)
 				return nil
-			})
+			}); err != nil {
+				t.Errorf("submit task: %v", err)
+				tasks.Done()
+			}
 		}()
 	}
 
-	wg.Wait()
-	time.Sleep(100 * time.Millisecond)
+	submissions.Wait()
+	tasks.Wait()
 
 	assert.Equal(t, int32(100), count)
 }
