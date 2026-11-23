@@ -19,38 +19,28 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	UserService_GetUser_FullMethodName        = "/user.v1.UserService/GetUser"
-	UserService_Login_FullMethodName          = "/user.v1.UserService/Login"
-	UserService_CreateUser_FullMethodName     = "/user.v1.UserService/CreateUser"
-	UserService_GetBalance_FullMethodName     = "/user.v1.UserService/GetBalance"
-	UserService_FreezeAmount_FullMethodName   = "/user.v1.UserService/FreezeAmount"
-	UserService_UnfreezeAmount_FullMethodName = "/user.v1.UserService/UnfreezeAmount"
-	UserService_DeductAmount_FullMethodName   = "/user.v1.UserService/DeductAmount"
-	UserService_AddAmount_FullMethodName      = "/user.v1.UserService/AddAmount"
+	UserService_CreateUser_FullMethodName  = "/user.v1.UserService/CreateUser"
+	UserService_Login_FullMethodName       = "/user.v1.UserService/Login"
+	UserService_GetUser_FullMethodName     = "/user.v1.UserService/GetUser"
+	UserService_GetBalances_FullMethodName = "/user.v1.UserService/GetBalances"
+	UserService_Deposit_FullMethodName     = "/user.v1.UserService/Deposit"
+	UserService_Freeze_FullMethodName      = "/user.v1.UserService/Freeze"
+	UserService_Unfreeze_FullMethodName    = "/user.v1.UserService/Unfreeze"
+	UserService_SettleTrade_FullMethodName = "/user.v1.UserService/SettleTrade"
 )
 
 // UserServiceClient is the client API for UserService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-//
-// 用户服务定义
 type UserServiceClient interface {
-	// 获取用户信息
-	GetUser(ctx context.Context, in *GetUserRequest, opts ...grpc.CallOption) (*GetUserResponse, error)
-	// 用户登录
-	Login(ctx context.Context, in *LoginRequest, opts ...grpc.CallOption) (*LoginResponse, error)
-	// 创建用户（注册）
 	CreateUser(ctx context.Context, in *CreateUserRequest, opts ...grpc.CallOption) (*CreateUserResponse, error)
-	// 获取用户余额
-	GetBalance(ctx context.Context, in *GetBalanceRequest, opts ...grpc.CallOption) (*GetBalanceResponse, error)
-	// 冻结余额
-	FreezeAmount(ctx context.Context, in *FreezeAmountRequest, opts ...grpc.CallOption) (*FreezeAmountResponse, error)
-	// 解冻余额
-	UnfreezeAmount(ctx context.Context, in *UnfreezeAmountRequest, opts ...grpc.CallOption) (*UnfreezeAmountResponse, error)
-	// 扣减余额（撮合成交后调用）
-	DeductAmount(ctx context.Context, in *DeductAmountRequest, opts ...grpc.CallOption) (*DeductAmountResponse, error)
-	// 增加余额
-	AddAmount(ctx context.Context, in *AddAmountRequest, opts ...grpc.CallOption) (*AddAmountResponse, error)
+	Login(ctx context.Context, in *LoginRequest, opts ...grpc.CallOption) (*LoginResponse, error)
+	GetUser(ctx context.Context, in *GetUserRequest, opts ...grpc.CallOption) (*GetUserResponse, error)
+	GetBalances(ctx context.Context, in *GetBalancesRequest, opts ...grpc.CallOption) (*GetBalancesResponse, error)
+	Deposit(ctx context.Context, in *DepositRequest, opts ...grpc.CallOption) (*DepositResponse, error)
+	Freeze(ctx context.Context, in *FreezeRequest, opts ...grpc.CallOption) (*FreezeResponse, error)
+	Unfreeze(ctx context.Context, in *UnfreezeRequest, opts ...grpc.CallOption) (*UnfreezeResponse, error)
+	SettleTrade(ctx context.Context, in *SettleTradeRequest, opts ...grpc.CallOption) (*SettleTradeResponse, error)
 }
 
 type userServiceClient struct {
@@ -61,10 +51,10 @@ func NewUserServiceClient(cc grpc.ClientConnInterface) UserServiceClient {
 	return &userServiceClient{cc}
 }
 
-func (c *userServiceClient) GetUser(ctx context.Context, in *GetUserRequest, opts ...grpc.CallOption) (*GetUserResponse, error) {
+func (c *userServiceClient) CreateUser(ctx context.Context, in *CreateUserRequest, opts ...grpc.CallOption) (*CreateUserResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetUserResponse)
-	err := c.cc.Invoke(ctx, UserService_GetUser_FullMethodName, in, out, cOpts...)
+	out := new(CreateUserResponse)
+	err := c.cc.Invoke(ctx, UserService_CreateUser_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -81,60 +71,60 @@ func (c *userServiceClient) Login(ctx context.Context, in *LoginRequest, opts ..
 	return out, nil
 }
 
-func (c *userServiceClient) CreateUser(ctx context.Context, in *CreateUserRequest, opts ...grpc.CallOption) (*CreateUserResponse, error) {
+func (c *userServiceClient) GetUser(ctx context.Context, in *GetUserRequest, opts ...grpc.CallOption) (*GetUserResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CreateUserResponse)
-	err := c.cc.Invoke(ctx, UserService_CreateUser_FullMethodName, in, out, cOpts...)
+	out := new(GetUserResponse)
+	err := c.cc.Invoke(ctx, UserService_GetUser_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *userServiceClient) GetBalance(ctx context.Context, in *GetBalanceRequest, opts ...grpc.CallOption) (*GetBalanceResponse, error) {
+func (c *userServiceClient) GetBalances(ctx context.Context, in *GetBalancesRequest, opts ...grpc.CallOption) (*GetBalancesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetBalanceResponse)
-	err := c.cc.Invoke(ctx, UserService_GetBalance_FullMethodName, in, out, cOpts...)
+	out := new(GetBalancesResponse)
+	err := c.cc.Invoke(ctx, UserService_GetBalances_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *userServiceClient) FreezeAmount(ctx context.Context, in *FreezeAmountRequest, opts ...grpc.CallOption) (*FreezeAmountResponse, error) {
+func (c *userServiceClient) Deposit(ctx context.Context, in *DepositRequest, opts ...grpc.CallOption) (*DepositResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(FreezeAmountResponse)
-	err := c.cc.Invoke(ctx, UserService_FreezeAmount_FullMethodName, in, out, cOpts...)
+	out := new(DepositResponse)
+	err := c.cc.Invoke(ctx, UserService_Deposit_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *userServiceClient) UnfreezeAmount(ctx context.Context, in *UnfreezeAmountRequest, opts ...grpc.CallOption) (*UnfreezeAmountResponse, error) {
+func (c *userServiceClient) Freeze(ctx context.Context, in *FreezeRequest, opts ...grpc.CallOption) (*FreezeResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(UnfreezeAmountResponse)
-	err := c.cc.Invoke(ctx, UserService_UnfreezeAmount_FullMethodName, in, out, cOpts...)
+	out := new(FreezeResponse)
+	err := c.cc.Invoke(ctx, UserService_Freeze_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *userServiceClient) DeductAmount(ctx context.Context, in *DeductAmountRequest, opts ...grpc.CallOption) (*DeductAmountResponse, error) {
+func (c *userServiceClient) Unfreeze(ctx context.Context, in *UnfreezeRequest, opts ...grpc.CallOption) (*UnfreezeResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DeductAmountResponse)
-	err := c.cc.Invoke(ctx, UserService_DeductAmount_FullMethodName, in, out, cOpts...)
+	out := new(UnfreezeResponse)
+	err := c.cc.Invoke(ctx, UserService_Unfreeze_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *userServiceClient) AddAmount(ctx context.Context, in *AddAmountRequest, opts ...grpc.CallOption) (*AddAmountResponse, error) {
+func (c *userServiceClient) SettleTrade(ctx context.Context, in *SettleTradeRequest, opts ...grpc.CallOption) (*SettleTradeResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(AddAmountResponse)
-	err := c.cc.Invoke(ctx, UserService_AddAmount_FullMethodName, in, out, cOpts...)
+	out := new(SettleTradeResponse)
+	err := c.cc.Invoke(ctx, UserService_SettleTrade_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -144,25 +134,15 @@ func (c *userServiceClient) AddAmount(ctx context.Context, in *AddAmountRequest,
 // UserServiceServer is the server API for UserService service.
 // All implementations must embed UnimplementedUserServiceServer
 // for forward compatibility.
-//
-// 用户服务定义
 type UserServiceServer interface {
-	// 获取用户信息
-	GetUser(context.Context, *GetUserRequest) (*GetUserResponse, error)
-	// 用户登录
-	Login(context.Context, *LoginRequest) (*LoginResponse, error)
-	// 创建用户（注册）
 	CreateUser(context.Context, *CreateUserRequest) (*CreateUserResponse, error)
-	// 获取用户余额
-	GetBalance(context.Context, *GetBalanceRequest) (*GetBalanceResponse, error)
-	// 冻结余额
-	FreezeAmount(context.Context, *FreezeAmountRequest) (*FreezeAmountResponse, error)
-	// 解冻余额
-	UnfreezeAmount(context.Context, *UnfreezeAmountRequest) (*UnfreezeAmountResponse, error)
-	// 扣减余额（撮合成交后调用）
-	DeductAmount(context.Context, *DeductAmountRequest) (*DeductAmountResponse, error)
-	// 增加余额
-	AddAmount(context.Context, *AddAmountRequest) (*AddAmountResponse, error)
+	Login(context.Context, *LoginRequest) (*LoginResponse, error)
+	GetUser(context.Context, *GetUserRequest) (*GetUserResponse, error)
+	GetBalances(context.Context, *GetBalancesRequest) (*GetBalancesResponse, error)
+	Deposit(context.Context, *DepositRequest) (*DepositResponse, error)
+	Freeze(context.Context, *FreezeRequest) (*FreezeResponse, error)
+	Unfreeze(context.Context, *UnfreezeRequest) (*UnfreezeResponse, error)
+	SettleTrade(context.Context, *SettleTradeRequest) (*SettleTradeResponse, error)
 	mustEmbedUnimplementedUserServiceServer()
 }
 
@@ -173,29 +153,29 @@ type UserServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedUserServiceServer struct{}
 
-func (UnimplementedUserServiceServer) GetUser(context.Context, *GetUserRequest) (*GetUserResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetUser not implemented")
+func (UnimplementedUserServiceServer) CreateUser(context.Context, *CreateUserRequest) (*CreateUserResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateUser not implemented")
 }
 func (UnimplementedUserServiceServer) Login(context.Context, *LoginRequest) (*LoginResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Login not implemented")
 }
-func (UnimplementedUserServiceServer) CreateUser(context.Context, *CreateUserRequest) (*CreateUserResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method CreateUser not implemented")
+func (UnimplementedUserServiceServer) GetUser(context.Context, *GetUserRequest) (*GetUserResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetUser not implemented")
 }
-func (UnimplementedUserServiceServer) GetBalance(context.Context, *GetBalanceRequest) (*GetBalanceResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBalance not implemented")
+func (UnimplementedUserServiceServer) GetBalances(context.Context, *GetBalancesRequest) (*GetBalancesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetBalances not implemented")
 }
-func (UnimplementedUserServiceServer) FreezeAmount(context.Context, *FreezeAmountRequest) (*FreezeAmountResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method FreezeAmount not implemented")
+func (UnimplementedUserServiceServer) Deposit(context.Context, *DepositRequest) (*DepositResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Deposit not implemented")
 }
-func (UnimplementedUserServiceServer) UnfreezeAmount(context.Context, *UnfreezeAmountRequest) (*UnfreezeAmountResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method UnfreezeAmount not implemented")
+func (UnimplementedUserServiceServer) Freeze(context.Context, *FreezeRequest) (*FreezeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Freeze not implemented")
 }
-func (UnimplementedUserServiceServer) DeductAmount(context.Context, *DeductAmountRequest) (*DeductAmountResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method DeductAmount not implemented")
+func (UnimplementedUserServiceServer) Unfreeze(context.Context, *UnfreezeRequest) (*UnfreezeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Unfreeze not implemented")
 }
-func (UnimplementedUserServiceServer) AddAmount(context.Context, *AddAmountRequest) (*AddAmountResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method AddAmount not implemented")
+func (UnimplementedUserServiceServer) SettleTrade(context.Context, *SettleTradeRequest) (*SettleTradeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SettleTrade not implemented")
 }
 func (UnimplementedUserServiceServer) mustEmbedUnimplementedUserServiceServer() {}
 func (UnimplementedUserServiceServer) testEmbeddedByValue()                     {}
@@ -218,20 +198,20 @@ func RegisterUserServiceServer(s grpc.ServiceRegistrar, srv UserServiceServer) {
 	s.RegisterService(&UserService_ServiceDesc, srv)
 }
 
-func _UserService_GetUser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetUserRequest)
+func _UserService_CreateUser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateUserRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(UserServiceServer).GetUser(ctx, in)
+		return srv.(UserServiceServer).CreateUser(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: UserService_GetUser_FullMethodName,
+		FullMethod: UserService_CreateUser_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(UserServiceServer).GetUser(ctx, req.(*GetUserRequest))
+		return srv.(UserServiceServer).CreateUser(ctx, req.(*CreateUserRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -254,110 +234,110 @@ func _UserService_Login_Handler(srv interface{}, ctx context.Context, dec func(i
 	return interceptor(ctx, in, info, handler)
 }
 
-func _UserService_CreateUser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CreateUserRequest)
+func _UserService_GetUser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetUserRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(UserServiceServer).CreateUser(ctx, in)
+		return srv.(UserServiceServer).GetUser(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: UserService_CreateUser_FullMethodName,
+		FullMethod: UserService_GetUser_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(UserServiceServer).CreateUser(ctx, req.(*CreateUserRequest))
+		return srv.(UserServiceServer).GetUser(ctx, req.(*GetUserRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _UserService_GetBalance_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetBalanceRequest)
+func _UserService_GetBalances_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBalancesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(UserServiceServer).GetBalance(ctx, in)
+		return srv.(UserServiceServer).GetBalances(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: UserService_GetBalance_FullMethodName,
+		FullMethod: UserService_GetBalances_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(UserServiceServer).GetBalance(ctx, req.(*GetBalanceRequest))
+		return srv.(UserServiceServer).GetBalances(ctx, req.(*GetBalancesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _UserService_FreezeAmount_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(FreezeAmountRequest)
+func _UserService_Deposit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DepositRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(UserServiceServer).FreezeAmount(ctx, in)
+		return srv.(UserServiceServer).Deposit(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: UserService_FreezeAmount_FullMethodName,
+		FullMethod: UserService_Deposit_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(UserServiceServer).FreezeAmount(ctx, req.(*FreezeAmountRequest))
+		return srv.(UserServiceServer).Deposit(ctx, req.(*DepositRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _UserService_UnfreezeAmount_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(UnfreezeAmountRequest)
+func _UserService_Freeze_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FreezeRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(UserServiceServer).UnfreezeAmount(ctx, in)
+		return srv.(UserServiceServer).Freeze(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: UserService_UnfreezeAmount_FullMethodName,
+		FullMethod: UserService_Freeze_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(UserServiceServer).UnfreezeAmount(ctx, req.(*UnfreezeAmountRequest))
+		return srv.(UserServiceServer).Freeze(ctx, req.(*FreezeRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _UserService_DeductAmount_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DeductAmountRequest)
+func _UserService_Unfreeze_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UnfreezeRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(UserServiceServer).DeductAmount(ctx, in)
+		return srv.(UserServiceServer).Unfreeze(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: UserService_DeductAmount_FullMethodName,
+		FullMethod: UserService_Unfreeze_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(UserServiceServer).DeductAmount(ctx, req.(*DeductAmountRequest))
+		return srv.(UserServiceServer).Unfreeze(ctx, req.(*UnfreezeRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _UserService_AddAmount_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AddAmountRequest)
+func _UserService_SettleTrade_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SettleTradeRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(UserServiceServer).AddAmount(ctx, in)
+		return srv.(UserServiceServer).SettleTrade(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: UserService_AddAmount_FullMethodName,
+		FullMethod: UserService_SettleTrade_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(UserServiceServer).AddAmount(ctx, req.(*AddAmountRequest))
+		return srv.(UserServiceServer).SettleTrade(ctx, req.(*SettleTradeRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -370,36 +350,36 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*UserServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "GetUser",
-			Handler:    _UserService_GetUser_Handler,
+			MethodName: "CreateUser",
+			Handler:    _UserService_CreateUser_Handler,
 		},
 		{
 			MethodName: "Login",
 			Handler:    _UserService_Login_Handler,
 		},
 		{
-			MethodName: "CreateUser",
-			Handler:    _UserService_CreateUser_Handler,
+			MethodName: "GetUser",
+			Handler:    _UserService_GetUser_Handler,
 		},
 		{
-			MethodName: "GetBalance",
-			Handler:    _UserService_GetBalance_Handler,
+			MethodName: "GetBalances",
+			Handler:    _UserService_GetBalances_Handler,
 		},
 		{
-			MethodName: "FreezeAmount",
-			Handler:    _UserService_FreezeAmount_Handler,
+			MethodName: "Deposit",
+			Handler:    _UserService_Deposit_Handler,
 		},
 		{
-			MethodName: "UnfreezeAmount",
-			Handler:    _UserService_UnfreezeAmount_Handler,
+			MethodName: "Freeze",
+			Handler:    _UserService_Freeze_Handler,
 		},
 		{
-			MethodName: "DeductAmount",
-			Handler:    _UserService_DeductAmount_Handler,
+			MethodName: "Unfreeze",
+			Handler:    _UserService_Unfreeze_Handler,
 		},
 		{
-			MethodName: "AddAmount",
-			Handler:    _UserService_AddAmount_Handler,
+			MethodName: "SettleTrade",
+			Handler:    _UserService_SettleTrade_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

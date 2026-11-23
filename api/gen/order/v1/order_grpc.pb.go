@@ -19,29 +19,22 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	OrderService_CreateOrder_FullMethodName       = "/order.v1.OrderService/CreateOrder"
-	OrderService_CancelOrder_FullMethodName       = "/order.v1.OrderService/CancelOrder"
-	OrderService_GetOrder_FullMethodName          = "/order.v1.OrderService/GetOrder"
-	OrderService_ListOrders_FullMethodName        = "/order.v1.OrderService/ListOrders"
-	OrderService_UpdateOrderStatus_FullMethodName = "/order.v1.OrderService/UpdateOrderStatus"
+	OrderService_CreateOrder_FullMethodName = "/order.v1.OrderService/CreateOrder"
+	OrderService_CancelOrder_FullMethodName = "/order.v1.OrderService/CancelOrder"
+	OrderService_GetOrder_FullMethodName    = "/order.v1.OrderService/GetOrder"
+	OrderService_ListOrders_FullMethodName  = "/order.v1.OrderService/ListOrders"
+	OrderService_ListTrades_FullMethodName  = "/order.v1.OrderService/ListTrades"
 )
 
 // OrderServiceClient is the client API for OrderService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-//
-// 订单服务定义
 type OrderServiceClient interface {
-	// 创建订单
 	CreateOrder(ctx context.Context, in *CreateOrderRequest, opts ...grpc.CallOption) (*CreateOrderResponse, error)
-	// 取消订单
 	CancelOrder(ctx context.Context, in *CancelOrderRequest, opts ...grpc.CallOption) (*CancelOrderResponse, error)
-	// 获取订单
 	GetOrder(ctx context.Context, in *GetOrderRequest, opts ...grpc.CallOption) (*GetOrderResponse, error)
-	// 订单列表
 	ListOrders(ctx context.Context, in *ListOrdersRequest, opts ...grpc.CallOption) (*ListOrdersResponse, error)
-	// 更新订单状态（撮合引擎调用）
-	UpdateOrderStatus(ctx context.Context, in *UpdateOrderStatusRequest, opts ...grpc.CallOption) (*UpdateOrderStatusResponse, error)
+	ListTrades(ctx context.Context, in *ListTradesRequest, opts ...grpc.CallOption) (*ListTradesResponse, error)
 }
 
 type orderServiceClient struct {
@@ -92,10 +85,10 @@ func (c *orderServiceClient) ListOrders(ctx context.Context, in *ListOrdersReque
 	return out, nil
 }
 
-func (c *orderServiceClient) UpdateOrderStatus(ctx context.Context, in *UpdateOrderStatusRequest, opts ...grpc.CallOption) (*UpdateOrderStatusResponse, error) {
+func (c *orderServiceClient) ListTrades(ctx context.Context, in *ListTradesRequest, opts ...grpc.CallOption) (*ListTradesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(UpdateOrderStatusResponse)
-	err := c.cc.Invoke(ctx, OrderService_UpdateOrderStatus_FullMethodName, in, out, cOpts...)
+	out := new(ListTradesResponse)
+	err := c.cc.Invoke(ctx, OrderService_ListTrades_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -105,19 +98,12 @@ func (c *orderServiceClient) UpdateOrderStatus(ctx context.Context, in *UpdateOr
 // OrderServiceServer is the server API for OrderService service.
 // All implementations must embed UnimplementedOrderServiceServer
 // for forward compatibility.
-//
-// 订单服务定义
 type OrderServiceServer interface {
-	// 创建订单
 	CreateOrder(context.Context, *CreateOrderRequest) (*CreateOrderResponse, error)
-	// 取消订单
 	CancelOrder(context.Context, *CancelOrderRequest) (*CancelOrderResponse, error)
-	// 获取订单
 	GetOrder(context.Context, *GetOrderRequest) (*GetOrderResponse, error)
-	// 订单列表
 	ListOrders(context.Context, *ListOrdersRequest) (*ListOrdersResponse, error)
-	// 更新订单状态（撮合引擎调用）
-	UpdateOrderStatus(context.Context, *UpdateOrderStatusRequest) (*UpdateOrderStatusResponse, error)
+	ListTrades(context.Context, *ListTradesRequest) (*ListTradesResponse, error)
 	mustEmbedUnimplementedOrderServiceServer()
 }
 
@@ -140,8 +126,8 @@ func (UnimplementedOrderServiceServer) GetOrder(context.Context, *GetOrderReques
 func (UnimplementedOrderServiceServer) ListOrders(context.Context, *ListOrdersRequest) (*ListOrdersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListOrders not implemented")
 }
-func (UnimplementedOrderServiceServer) UpdateOrderStatus(context.Context, *UpdateOrderStatusRequest) (*UpdateOrderStatusResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method UpdateOrderStatus not implemented")
+func (UnimplementedOrderServiceServer) ListTrades(context.Context, *ListTradesRequest) (*ListTradesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListTrades not implemented")
 }
 func (UnimplementedOrderServiceServer) mustEmbedUnimplementedOrderServiceServer() {}
 func (UnimplementedOrderServiceServer) testEmbeddedByValue()                      {}
@@ -236,20 +222,20 @@ func _OrderService_ListOrders_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _OrderService_UpdateOrderStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(UpdateOrderStatusRequest)
+func _OrderService_ListTrades_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTradesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(OrderServiceServer).UpdateOrderStatus(ctx, in)
+		return srv.(OrderServiceServer).ListTrades(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: OrderService_UpdateOrderStatus_FullMethodName,
+		FullMethod: OrderService_ListTrades_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(OrderServiceServer).UpdateOrderStatus(ctx, req.(*UpdateOrderStatusRequest))
+		return srv.(OrderServiceServer).ListTrades(ctx, req.(*ListTradesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -278,8 +264,8 @@ var OrderService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _OrderService_ListOrders_Handler,
 		},
 		{
-			MethodName: "UpdateOrderStatus",
-			Handler:    _OrderService_UpdateOrderStatus_Handler,
+			MethodName: "ListTrades",
+			Handler:    _OrderService_ListTrades_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
