@@ -64,11 +64,14 @@ func (f fakeUser) GetBalances(_ context.Context, req *userpb.GetBalancesRequest,
 
 type fakeOrder struct {
 	orderpb.OrderServiceClient
-	create func(*orderpb.CreateOrderRequest) (*orderpb.CreateOrderResponse, error)
-	get    func(*orderpb.GetOrderRequest) (*orderpb.GetOrderResponse, error)
-	cancel func(*orderpb.CancelOrderRequest) (*orderpb.CancelOrderResponse, error)
-	list   func(*orderpb.ListOrdersRequest) (*orderpb.ListOrdersResponse, error)
-	trades func(*orderpb.ListTradesRequest) (*orderpb.ListTradesResponse, error)
+	create       func(*orderpb.CreateOrderRequest) (*orderpb.CreateOrderResponse, error)
+	get          func(*orderpb.GetOrderRequest) (*orderpb.GetOrderResponse, error)
+	cancel       func(*orderpb.CancelOrderRequest) (*orderpb.CancelOrderResponse, error)
+	list         func(*orderpb.ListOrdersRequest) (*orderpb.ListOrdersResponse, error)
+	trades       func(*orderpb.ListTradesRequest) (*orderpb.ListTradesResponse, error)
+	marketTrades func(*orderpb.ListMarketTradesRequest) (*orderpb.ListMarketTradesResponse, error)
+	candles      func(*orderpb.ListCandlesRequest) (*orderpb.ListCandlesResponse, error)
+	tickers      func(*orderpb.ListTickersRequest) (*orderpb.ListTickersResponse, error)
 }
 
 func (f fakeOrder) CreateOrder(_ context.Context, req *orderpb.CreateOrderRequest, _ ...grpc.CallOption) (*orderpb.CreateOrderResponse, error) {
@@ -89,6 +92,18 @@ func (f fakeOrder) ListOrders(_ context.Context, req *orderpb.ListOrdersRequest,
 
 func (f fakeOrder) ListTrades(_ context.Context, req *orderpb.ListTradesRequest, _ ...grpc.CallOption) (*orderpb.ListTradesResponse, error) {
 	return f.trades(req)
+}
+
+func (f fakeOrder) ListMarketTrades(_ context.Context, req *orderpb.ListMarketTradesRequest, _ ...grpc.CallOption) (*orderpb.ListMarketTradesResponse, error) {
+	return f.marketTrades(req)
+}
+
+func (f fakeOrder) ListCandles(_ context.Context, req *orderpb.ListCandlesRequest, _ ...grpc.CallOption) (*orderpb.ListCandlesResponse, error) {
+	return f.candles(req)
+}
+
+func (f fakeOrder) ListTickers(_ context.Context, req *orderpb.ListTickersRequest, _ ...grpc.CallOption) (*orderpb.ListTickersResponse, error) {
+	return f.tickers(req)
 }
 
 type fakeMatching struct {
@@ -429,6 +444,69 @@ func TestOrderBookIsPublic(t *testing.T) {
 		w := serve(t, r, http.MethodGet, path+query, "", "", "")
 		require.Equal(t, http.StatusBadRequest, w.Code, "query %q", query)
 	}
+}
+
+func TestMarketTickersArePublic(t *testing.T) {
+	r := testRouter(t, &client.Clients{Order: fakeOrder{tickers: func(req *orderpb.ListTickersRequest) (*orderpb.ListTickersResponse, error) {
+		require.Equal(t, []string{"BTC/USDT"}, req.GetSymbols())
+		return &orderpb.ListTickersResponse{Tickers: []*orderpb.Ticker{{
+			Symbol: "BTC/USDT", LastPrice: "121", Open_24H: "110", High_24H: "121", Low_24H: "99",
+			Volume_24H: "5", QuoteVolume_24H: "549", ChangePercent_24H: "10.00", TradeCount_24H: 4,
+		}}}, nil
+	}}}, nil)
+	for _, query := range []string{"", "?symbols=btc-usdt"} {
+		w := serve(t, r, http.MethodGet, "/api/v1/market/tickers"+query, "", "", "")
+		require.JSONEq(t, `[{"symbol":"BTC/USDT","last_price":"121","open_24h":"110","high_24h":"121","low_24h":"99","volume_24h":"5","quote_volume_24h":"549","change_percent_24h":"10.00","trade_count_24h":4}]`, string(decode(t, w, http.StatusOK).Data))
+	}
+}
+
+func TestMarketTickersRejectMalformedFilter(t *testing.T) {
+	r := testRouter(t, &client.Clients{Order: fakeOrder{tickers: func(*orderpb.ListTickersRequest) (*orderpb.ListTickersResponse, error) {
+		t.Fatal("malformed ticker filter reached order service")
+		return nil, nil
+	}}}, nil)
+	w := serve(t, r, http.MethodGet, "/api/v1/market/tickers?symbols=%XX", "", "", "")
+	require.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestMarketCandles(t *testing.T) {
+	calls := 0
+	r := testRouter(t, &client.Clients{Order: fakeOrder{candles: func(req *orderpb.ListCandlesRequest) (*orderpb.ListCandlesResponse, error) {
+		calls++
+		require.Equal(t, "BTC/USDT", req.GetSymbol())
+		require.Equal(t, int32(3600), req.GetIntervalSeconds())
+		require.Equal(t, int32(300), req.GetLimit())
+		return &orderpb.ListCandlesResponse{Candles: []*orderpb.Candle{{
+			OpenTime: 3600, Open: "120", High: "121", Low: "120", Close: "121", Volume: "2",
+		}}}, nil
+	}}}, nil)
+	const path = "/api/v1/market/candles/btc-usdt"
+	w := serve(t, r, http.MethodGet, path+"?interval=2h", "", "", "")
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.Zero(t, calls)
+	w = serve(t, r, http.MethodGet, path+"?interval=1h", "", "", "")
+	require.JSONEq(t, `{"symbol":"BTC/USDT","interval":"1h","candles":[{"time":3600,"open":"120","high":"121","low":"120","close":"121","volume":"2"}]}`, string(decode(t, w, http.StatusOK).Data))
+	require.Equal(t, 1, calls)
+}
+
+func TestMarketTrades(t *testing.T) {
+	calls := 0
+	r := testRouter(t, &client.Clients{Order: fakeOrder{marketTrades: func(req *orderpb.ListMarketTradesRequest) (*orderpb.ListMarketTradesResponse, error) {
+		calls++
+		require.Equal(t, "BTC/USDT", req.GetSymbol())
+		require.Equal(t, int32(50), req.GetLimit())
+		return &orderpb.ListMarketTradesResponse{Trades: []*orderpb.MarketTrade{{
+			TradeId: "trade-1", Price: "120", Quantity: "1", TakerSide: orderpb.OrderSide_ORDER_SIDE_SELL,
+			CreatedAt: timestamppb.New(time.Unix(0, 123456789)),
+		}}}, nil
+	}}}, nil)
+	const path = "/api/v1/market/trades/BTC-USDT"
+	w := serve(t, r, http.MethodGet, path+"?limit=201", "", "", "")
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.Zero(t, calls)
+	w = serve(t, r, http.MethodGet, path, "", "", "")
+	require.JSONEq(t, `{"symbol":"BTC/USDT","trades":[{"trade_id":"trade-1","price":"120","quantity":"1","taker_side":"sell","created_at":"1970-01-01T00:00:00.123456789Z"}]}`, string(decode(t, w, http.StatusOK).Data))
+	require.Equal(t, 1, calls)
 }
 
 func startHealthServer(t *testing.T) (*grpc.ClientConn, *health.Server) {

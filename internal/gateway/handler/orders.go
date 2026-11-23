@@ -128,7 +128,7 @@ func (h *Handler) listFilter(c *gin.Context) (market string, size int32, ok bool
 			return "", 0, false
 		}
 	}
-	size, ok = querySize(c, "page_size", 50)
+	size, ok = querySize(c, "page_size", 50, 200)
 	return market, size, ok
 }
 
@@ -141,14 +141,14 @@ func (h *Handler) canonicalSymbol(c *gin.Context, raw string) (string, bool) {
 	return p.String(), true
 }
 
-func querySize(c *gin.Context, param string, fallback int32) (int32, bool) {
+func querySize(c *gin.Context, param string, fallback, max int32) (int32, bool) {
 	value := c.Query(param)
 	if value == "" {
 		return fallback, true
 	}
 	size, err := strconv.ParseInt(value, 10, 32)
-	if err != nil || size < 1 || size > 200 {
-		response.BadRequest(c, param+" must be between 1 and 200")
+	if err != nil || size < 1 || size > int64(max) {
+		response.BadRequest(c, param+" must be between 1 and "+strconv.Itoa(int(max)))
 		return 0, false
 	}
 	return int32(size), true

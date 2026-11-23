@@ -16,10 +16,17 @@ type Handler struct {
 	cl      *client.Clients
 	jwt     middleware.JWTConfig
 	allowed func(symbol.Pair) bool
+	symbols []string
 }
 
 func New(cl *client.Clients, jwt middleware.JWTConfig, symbols []string) *Handler {
-	return &Handler{cl: cl, jwt: jwt, allowed: symbol.Allowed(symbols)}
+	markets := make([]string, 0, len(symbols))
+	for _, raw := range symbols {
+		if pair, err := symbol.Parse(raw); err == nil {
+			markets = append(markets, pair.String())
+		}
+	}
+	return &Handler{cl: cl, jwt: jwt, allowed: symbol.Allowed(markets), symbols: markets}
 }
 
 var idempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)

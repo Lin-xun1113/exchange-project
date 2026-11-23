@@ -89,6 +89,7 @@ func retryReads() grpc.UnaryClientInterceptor {
 		switch method {
 		case userpb.UserService_GetUser_FullMethodName, userpb.UserService_GetBalances_FullMethodName,
 			orderpb.OrderService_GetOrder_FullMethodName, orderpb.OrderService_ListOrders_FullMethodName, orderpb.OrderService_ListTrades_FullMethodName,
+			orderpb.OrderService_ListMarketTrades_FullMethodName, orderpb.OrderService_ListCandles_FullMethodName, orderpb.OrderService_ListTickers_FullMethodName,
 			matchingpb.MatchingService_GetOrderBook_FullMethodName:
 			return retryRead(ctx, method, req, reply, cc, invoke, opts...)
 		default:

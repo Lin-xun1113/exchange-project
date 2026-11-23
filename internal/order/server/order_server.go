@@ -163,3 +163,49 @@ var orderStatuses = enumMapping(map[orderpb.OrderStatus]model.OrderStatus{
 	orderpb.OrderStatus_ORDER_STATUS_CANCELLED:      model.OrderStatusCancelled,
 	orderpb.OrderStatus_ORDER_STATUS_REJECTED:       model.OrderStatusRejected,
 })
+
+func (s *OrderServer) ListMarketTrades(ctx context.Context, req *orderpb.ListMarketTradesRequest) (*orderpb.ListMarketTradesResponse, error) {
+	trades, err := s.svc.ListMarketTrades(ctx, req.GetSymbol(), req.GetLimit())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*orderpb.MarketTrade, len(trades))
+	for i, trade := range trades {
+		out[i] = &orderpb.MarketTrade{
+			TradeId: trade.TradeID, Price: trade.Price.String(), Quantity: trade.Quantity.String(),
+			TakerSide: sides.toProto[trade.TakerSide], CreatedAt: timestamppb.New(trade.CreatedAt),
+		}
+	}
+	return &orderpb.ListMarketTradesResponse{Trades: out}, nil
+}
+
+func (s *OrderServer) ListCandles(ctx context.Context, req *orderpb.ListCandlesRequest) (*orderpb.ListCandlesResponse, error) {
+	candles, err := s.svc.ListCandles(ctx, req.GetSymbol(), req.GetIntervalSeconds(), req.GetLimit())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*orderpb.Candle, len(candles))
+	for i, candle := range candles {
+		out[i] = &orderpb.Candle{
+			OpenTime: candle.OpenTime, Open: candle.Open.String(), High: candle.High.String(),
+			Low: candle.Low.String(), Close: candle.Close.String(), Volume: candle.Volume.String(),
+		}
+	}
+	return &orderpb.ListCandlesResponse{Candles: out}, nil
+}
+
+func (s *OrderServer) ListTickers(ctx context.Context, req *orderpb.ListTickersRequest) (*orderpb.ListTickersResponse, error) {
+	tickers, err := s.svc.ListTickers(ctx, req.GetSymbols())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*orderpb.Ticker, len(tickers))
+	for i, ticker := range tickers {
+		out[i] = &orderpb.Ticker{
+			Symbol: ticker.Symbol, LastPrice: ticker.Last.String(), Open_24H: ticker.Open.String(),
+			High_24H: ticker.High.String(), Low_24H: ticker.Low.String(), Volume_24H: ticker.Volume.String(),
+			QuoteVolume_24H: ticker.QuoteVolume.String(), ChangePercent_24H: ticker.ChangePercent, TradeCount_24H: ticker.Count,
+		}
+	}
+	return &orderpb.ListTickersResponse{Tickers: out}, nil
+}

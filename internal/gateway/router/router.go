@@ -48,6 +48,9 @@ func New(cfg *config.Config, cl *client.Clients, rdb redis.UniversalClient, m *m
 	v1.POST("/auth/register", h.Register)
 	v1.POST("/auth/login", h.Login)
 	v1.GET("/market/orderbook/:symbol", h.OrderBook)
+	v1.GET("/market/trades/:symbol", h.MarketTrades)
+	v1.GET("/market/candles/:symbol", h.Candles)
+	v1.GET("/market/tickers", h.Tickers)
 
 	protected := v1.Group("", middleware.JWT(jwt))
 	protected.POST("/account/deposit", middleware.RequirePermission(middleware.PermissionBalanceDeposit), writeLimit, h.Deposit)
