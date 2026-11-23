@@ -8,16 +8,15 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/linxun2025/exchange-project/pkg/errors"
-	"github.com/linxun2025/exchange-project/pkg/logger"
 	"github.com/linxun2025/exchange-project/pkg/response"
 )
 
 const (
 	AuthorizationHeader = "Authorization"
-	BearerPrefix       = "Bearer "
-	UserIDKey          = "user_id"
-	UsernameKey        = "username"
-	RoleKey            = "role"
+	BearerPrefix        = "Bearer "
+	UserIDKey           = "user_id"
+	UsernameKey         = "username"
+	RoleKey             = "role"
 )
 
 // Claims JWT Claims
@@ -93,7 +92,7 @@ func ParseToken(tokenString, secret string) (*Claims, error) {
 }
 
 // GenerateToken 生成 Token
-func GenerateToken(userID int64, username, role string, secret string, expireTime time.Duration) (string, error) {
+func GenerateToken(userID int64, username, role string, secret string, expireTime time.Duration) (string, int64, error) {
 	now := time.Now()
 	claims := &Claims{
 		UserID:   userID,
@@ -109,7 +108,8 @@ func GenerateToken(userID int64, username, role string, secret string, expireTim
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(secret))
+	signed, err := token.SignedString([]byte(secret))
+	return signed, claims.ExpiresAt.Unix(), err
 }
 
 // GetUserID 获取用户ID
@@ -135,16 +135,3 @@ func GetRole(c *gin.Context) string {
 	}
 	return ""
 }
-
-// RefreshToken 刷新 Token
-func RefreshToken(tokenString, secret string, expireTime time.Duration) (string, error) {
-	claims, err := ParseToken(tokenString, secret)
-	if err != nil {
-		return "", err
-	}
-
-	return GenerateToken(claims.UserID, claims.Username, claims.Role, secret, expireTime)
-}
-
-// logger wrapper for debug logging
-var _ = logger.Info

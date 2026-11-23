@@ -2,183 +2,161 @@
 package smoke_test
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// TestDistributedTracingSmoke verifies that distributed tracing produces spans
-// across service boundaries when a request flows through gateway → order-svc → matching-svc.
+// TestDistributedTracingSmoke verifies gateway and order-svc spans share a trace.
 func TestDistributedTracingSmoke(t *testing.T) {
-	// Skip unless OTEL_SMOKE_TEST=1 is set.
-	// This test requires docker-compose up and all services healthy.
 	if os.Getenv("OTEL_SMOKE_TEST") != "1" {
 		t.Skip("OTEL_SMOKE_TEST=1 not set; skipping smoke test")
 	}
-
-	gatewayURL := os.Getenv("GATEWAY_URL")
+	gatewayURL := strings.TrimRight(os.Getenv("GATEWAY_URL"), "/")
 	if gatewayURL == "" {
 		gatewayURL = "http://localhost:8080"
 	}
-	jaegerURL := os.Getenv("JAEGER_URL")
+	jaegerURL := strings.TrimRight(os.Getenv("JAEGER_URL"), "/")
 	if jaegerURL == "" {
 		jaegerURL = "http://localhost:16686"
 	}
 
-	// Step 1: Register a test user and obtain a JWT token.
-	registerReq := map[string]string{
-		"username": fmt.Sprintf("smoke-%d", time.Now().Unix()),
-		"email":    fmt.Sprintf("smoke-%d@test.local", time.Now().Unix()),
-		"password": "TestPass123!",
-	}
-	body, err := json.Marshal(registerReq)
-	require.NoError(t, err)
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	id := fmt.Sprintf("smoke-%d", time.Now().UnixNano())
+	credentials := map[string]string{"username": id, "password": "TestPass123!"}
+	post(t, httpClient, gatewayURL+"/api/v1/auth/register", map[string]string{
+		"username": id, "password": credentials["password"], "email": id + "@test.local",
+	}, nil)
 
-	resp, err := http.Post(gatewayURL+"/api/v1/auth/register", "application/json", strings.NewReader(string(body)))
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode, "registration should succeed")
-
-	// Step 2: Login to get a JWT.
-	loginReq := map[string]string{
-		"username": registerReq["username"],
-		"password": registerReq["password"],
-	}
-	body, err = json.Marshal(loginReq)
-	require.NoError(t, err)
-
-	resp, err = http.Post(gatewayURL+"/api/v1/auth/login", "application/json", strings.NewReader(string(body)))
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode, "login should succeed")
-
-	var loginResp struct {
+	var login struct {
 		Token string `json:"token"`
 	}
-	err = json.NewDecoder(resp.Body).Decode(&loginResp)
-	require.NoError(t, err)
-	require.NotEmpty(t, loginResp.Token, "token should not be empty")
+	require.NoError(t, json.Unmarshal(post(t, httpClient, gatewayURL+"/api/v1/auth/login", credentials, nil), &login))
+	require.NotEmpty(t, login.Token)
 
-	// Step 3: Create an order with the JWT. Use x-request-id so we can search by it.
-	requestID := fmt.Sprintf("smoke-%d", time.Now().UnixNano())
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest("POST", gatewayURL+"/api/v1/orders", strings.NewReader(`{"symbol":"BTC/USDT","side":"buy","type":"limit","price":"50000","quantity":"0.1"}`))
+	post(t, httpClient, gatewayURL+"/api/v1/account/deposit", map[string]string{"asset": "USDT", "amount": "10000"}, map[string]string{
+		"Authorization": "Bearer " + login.Token, "Idempotency-Key": id + "-deposit",
+	})
+	var created struct {
+		Order struct {
+			ID   string `json:"order_id"`
+			Type string `json:"type"`
+		} `json:"order"`
+	}
+	orderData := post(t, httpClient, gatewayURL+"/api/v1/orders", map[string]string{
+		"symbol": "BTC/USDT", "side": "buy", "type": "ioc", "price": "0.00000001", "quantity": "1",
+	}, map[string]string{
+		"Authorization": "Bearer " + login.Token, "Idempotency-Key": id + "-order", "X-Request-ID": id,
+	})
+	require.NoError(t, json.Unmarshal(orderData, &created))
+	require.NotEmpty(t, created.Order.ID)
+	require.Equal(t, "ioc", created.Order.Type)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		found, err := orderTrace(ctx, httpClient, jaegerURL, id)
+		if err == nil && found {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("Jaeger did not report gateway and order-svc spans for request.id=%s: last query error: %v", id, err)
+		case <-ticker.C:
+		}
+	}
+}
+
+func post(t *testing.T, client *http.Client, url string, body, headers map[string]string) json.RawMessage {
+	t.Helper()
+	payload, err := json.Marshal(body)
 	require.NoError(t, err)
-	req.Header.Set("Authorization", "Bearer "+loginResp.Token)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url, bytes.NewReader(payload))
+	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-request-id", requestID)
-
-	httpResp, err := client.Do(req)
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
+	resp, err := client.Do(req)
 	require.NoError(t, err)
-	defer httpResp.Body.Close()
-	// We don't assert 200 because the user may not have balance set up;
-	// the gRPC call still produces spans regardless of business logic outcome.
-	_ = httpResp.StatusCode
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "%s: %s", url, data)
+	var result struct {
+		Code *int            `json:"code"`
+		Data json.RawMessage `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(data, &result))
+	require.NotNil(t, result.Code, "%s: missing or null code in %s", url, data)
+	require.Zero(t, *result.Code, "%s: %s", url, data)
+	return result.Data
+}
 
-	// Step 4: Wait for traces to appear in Jaeger.
-	jaegerAPI := jaegerURL + "/api/traces"
-	var traces []map[string]interface{}
-	pollInterval := 2 * time.Second
-	maxWait := 30 * time.Second
-	deadline := time.Now().Add(maxWait)
-
-	for time.Now().Before(deadline) {
-		req, err := http.NewRequest("GET", jaegerAPI, nil)
-		require.NoError(t, err)
-		req.Header.Set("Accept", "application/json")
-		q := req.URL.Query()
-		q.Set("service", "gateway")
-		q.Set("tag", "request.id="+requestID)
-		req.URL.RawQuery = q.Encode()
-
-		httpResp, err := client.Do(req)
-		if err == nil {
-			defer httpResp.Body.Close()
-			if httpResp.StatusCode == http.StatusOK {
-				var result struct {
-					Data []map[string]interface{} `json:"data"`
-				}
-				if err := json.NewDecoder(httpResp.Body).Decode(&result); err == nil {
-					traces = result.Data
-					if len(traces) > 0 {
+func orderTrace(ctx context.Context, client *http.Client, jaegerURL, requestID string) (bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jaegerURL+"/api/traces", nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Accept", "application/json")
+	query := req.URL.Query()
+	query.Set("service", "gateway")
+	query.Set("tag", "request.id:"+requestID)
+	req.URL.RawQuery = query.Encode()
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("Jaeger returned %s", resp.Status)
+	}
+	var result struct {
+		Data []struct {
+			Processes map[string]struct {
+				ServiceName string `json:"serviceName"`
+			} `json:"processes"`
+			Spans []struct {
+				ProcessID string `json:"processID"`
+				Tags      []struct {
+					Key   string `json:"key"`
+					Value any    `json:"value"`
+				} `json:"tags"`
+			} `json:"spans"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return false, err
+	}
+	for _, trace := range result.Data {
+		var gateway, order bool
+		for _, span := range trace.Spans {
+			switch trace.Processes[span.ProcessID].ServiceName {
+			case "gateway":
+				for _, tag := range span.Tags {
+					if tag.Key == "request.id" && tag.Value == requestID {
+						gateway = true
 						break
 					}
 				}
+			case "order-svc":
+				order = true
 			}
 		}
-		time.Sleep(pollInterval)
-	}
-
-	// Step 5: Assert that at least one trace was found.
-	assert.NotEmpty(t, traces, "expected at least one trace in Jaeger for request.id=%s within %v", requestID, maxWait)
-
-	// Step 6: Verify at least one span has the request.id tag matching the request ID.
-	if len(traces) > 0 {
-		trace := traces[0]
-		foundRequestIDTag := false
-		if spans, ok := trace["spans"].([]interface{}); ok {
-			for _, s := range spans {
-				span, ok := s.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				tags, ok := span["tags"].([]interface{})
-				if !ok {
-					continue
-				}
-				for _, tag := range tags {
-					t2, ok := tag.(map[string]interface{})
-					if !ok {
-						continue
-					}
-					key, _ := t2["key"].(string)
-					value, _ := t2["value"].(string)
-					if key == "request.id" && value == requestID {
-						foundRequestIDTag = true
-						break
-					}
-				}
-				if foundRequestIDTag {
-					break
-				}
-			}
-		}
-		assert.Truef(t, foundRequestIDTag,
-			"expected at least one span with tag request.id=%s, but none found in trace %v",
-			requestID, trace)
-	}
-
-	// Step 7: Verify the trace has spans from multiple services (indicating context propagation).
-	if len(traces) > 0 {
-		trace := traces[0]
-		spans, ok := trace["spans"].([]interface{})
-		if ok && len(spans) > 0 {
-			services := make(map[string]bool)
-			for _, s := range spans {
-				if span, ok := s.(map[string]interface{}); ok {
-					if procName, ok := span["processName"].(string); ok {
-						services[procName] = true
-					}
-				}
-			}
-			assert.Contains(t, services, "gateway", "trace should contain a gateway span")
-			backendFound := false
-			for svc := range services {
-				if svc == "order-svc" || svc == "matching-svc" {
-					backendFound = true
-					break
-				}
-			}
-			assert.Truef(t, backendFound,
-				"expected trace to contain at least one backend span (order-svc or matching-svc), got: %v", services)
-			t.Logf("services observed in trace: %v", services)
+		if gateway && order {
+			return true, nil
 		}
 	}
+	return false, nil
 }
