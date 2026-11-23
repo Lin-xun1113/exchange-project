@@ -21,6 +21,13 @@ CREATE TABLE IF NOT EXISTS `balances` (
     CONSTRAINT `chk_frozen` CHECK (`frozen` >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Deposits alone change total issuance; internal transfers conserve it.
+CREATE TABLE IF NOT EXISTS `asset_supply` (
+    `asset` VARCHAR(16) COLLATE utf8mb4_0900_bin NOT NULL PRIMARY KEY,
+    `total_issued` DECIMAL(36,18) NOT NULL,
+    CONSTRAINT `chk_total_issued` CHECK (`total_issued` >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS `ledger_entries` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     `ref_type` VARCHAR(16) COLLATE utf8mb4_0900_bin NOT NULL,

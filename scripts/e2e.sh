@@ -13,8 +13,8 @@ fail() {
 }
 
 request() {
-    local method=$1 endpoint=$2 token=${3:-} key=${4:-} data=${5:-} raw
-    local args=(-sS --max-time 3 -X "$method" -w $'\n%{http_code}')
+    local method=$1 endpoint=$2 token=${3:-} key=${4:-} data=${5:-} timeout=${6:-3} raw
+    local args=(-sS --max-time "$timeout" -X "$method" -w $'\n%{http_code}')
     if [[ -n $token ]]; then args+=(-H "Authorization: Bearer $token"); fi
     if [[ -n $key ]]; then args+=(-H "Idempotency-Key: $key"); fi
     if [[ -n $data ]]; then args+=(-H 'Content-Type: application/json' --data "$data"); fi
@@ -38,14 +38,19 @@ expect() {
 wait_for() {
     local label=$1 code=$2 predicate=$3 method=$4 endpoint=$5 token=$6
     shift 6
-    local deadline=$((SECONDS + 10))
+    local deadline=$((SECONDS + 10)) remaining
     while :; do
-        request "$method" "$endpoint" "$token"
-        if [[ $http_status == "$code" ]] && jq -e "$@" "$predicate" <<<"$body" >/dev/null 2>&1; then
+        remaining=$((deadline - SECONDS))
+        if (( remaining <= 0 )); then
+            fail "$label" "within 10s: HTTP $code, jq $predicate $*" "HTTP $http_status $body"
+        fi
+        request "$method" "$endpoint" "$token" '' '' "$((remaining < 3 ? remaining : 3))"
+        if (( SECONDS < deadline )) && [[ $http_status == "$code" ]] &&
+            jq -e "$@" "$predicate" <<<"$body" >/dev/null 2>&1 && (( SECONDS < deadline )); then
             return
         fi
         if (( SECONDS >= deadline )); then
-            expect "$label" "$code" "$predicate" "$@"
+            fail "$label" "within 10s: HTTP $code, jq $predicate $*" "HTTP $http_status $body"
         fi
         sleep 0.2
     done

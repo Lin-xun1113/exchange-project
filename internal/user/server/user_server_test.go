@@ -122,7 +122,7 @@ func TestLedgerRPCInsufficientBalanceStatuses(t *testing.T) {
 	require.Equal(t, codes.FailedPrecondition, status.Code(err), "%v", err)
 }
 
-func TestSettleTradeRPCRejectsBalanceCapacity(t *testing.T) {
+func TestSettleTradeRPCSucceedsAtAssetCapacity(t *testing.T) {
 	db := mysqltest.Open(t)
 	s := server.NewUserServer(nil, ledger.New(db, nil))
 	ctx := t.Context()
@@ -130,7 +130,7 @@ func TestSettleTradeRPCRejectsBalanceCapacity(t *testing.T) {
 	for _, req := range []*userpb.DepositRequest{
 		{UserId: 1, Asset: "USDT", Amount: "1", RefId: "fund-buyer"},
 		{UserId: 2, Asset: "BTC", Amount: "1", RefId: "fund-seller"},
-		{UserId: 2, Asset: "USDT", Amount: "999999999999999999.99999999", RefId: "fund-seller-quote"},
+		{UserId: 2, Asset: "USDT", Amount: "999999999999999998.99999999", RefId: "fund-seller-quote"},
 	} {
 		_, err := s.Deposit(ctx, req)
 		require.NoError(t, err)
@@ -148,8 +148,9 @@ func TestSettleTradeRPCRejectsBalanceCapacity(t *testing.T) {
 		TradeId: "trade", BaseAsset: "BTC", QuoteAsset: "USDT", BuyUserId: 1, SellUserId: 2,
 		Price: "1", Quantity: "1", BuyOrderPrice: "1",
 	})
-	require.Equal(t, codes.FailedPrecondition, status.Code(err), "%v", err)
-	require.Equal(t, ledger.ErrBalanceCapacity.Error(), status.Convert(err).Message())
+	require.NoError(t, err)
+	assertRPCBalances(t, s, 1, [3]string{"BTC", "1", "0"})
+	assertRPCBalances(t, s, 2, [3]string{"USDT", "999999999999999999.99999999", "0"})
 }
 
 func TestDepositCapacityLeavesRoomForUnfreeze(t *testing.T) {
@@ -164,9 +165,10 @@ func TestDepositCapacityLeavesRoomForUnfreeze(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, freeze.GetOk())
 
-	// The credit fits in available alone but takes the total one storage unit over the limit.
+	// The credit fits in available alone but takes issuance over the asset limit.
 	_, err = s.Deposit(ctx, &userpb.DepositRequest{UserId: 1, Asset: "USDT", Amount: "0.00000001", RefId: "credit"})
 	require.Equal(t, codes.FailedPrecondition, status.Code(err), "%v", err)
+	require.Equal(t, ledger.ErrBalanceCapacity.Error(), status.Convert(err).Message())
 	assertRPCBalances(t, s, 1, [3]string{"USDT", "999999999999999998.99999999", "1"})
 	var posted int64
 	require.NoError(t, db.Model(&model.LedgerEntry{}).Where("ref_type = ? AND ref_id = ?", "deposit", "credit").Count(&posted).Error)

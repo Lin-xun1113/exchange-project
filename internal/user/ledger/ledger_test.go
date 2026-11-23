@@ -13,6 +13,103 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestDepositCapsIssuanceAcrossUsers(t *testing.T) {
+	db := mysqltest.Open(t)
+	l := ledger.New(db, nil)
+	ctx := t.Context()
+	const funds = "999999999999999999.99999998"
+	const lastTick = "0.00000001"
+	_, err := l.Deposit(ctx, 1, "USDT", amount(funds), "fund")
+	require.NoError(t, err)
+
+	// The credit fits in user 2's balance but exceeds the shared capacity.
+	_, err = l.Deposit(ctx, 2, "USDT", amount("0.00000002"), "top-up")
+	require.ErrorIs(t, err, ledger.ErrBalanceCapacity)
+	assertBalances(t, l, 2)
+	require.EqualValues(t, 1, entryCount(t, db, "deposit"))
+
+	// The failed deposit does not claim the reference or the remaining capacity.
+	_, err = l.Deposit(ctx, 2, "USDT", amount(lastTick), "top-up")
+	require.NoError(t, err)
+	replay, err := l.Deposit(ctx, 2, "USDT", amount(lastTick), "top-up")
+	require.NoError(t, err, "replay at capacity must still succeed")
+	require.Equal(t, lastTick, replay.Available.String())
+	_, err = l.Deposit(ctx, 1, "USDT", amount(lastTick), "top-up")
+	require.ErrorIs(t, err, ledger.ErrDepositConflict)
+
+	assertBalances(t, l, 1, [3]string{"USDT", funds, "0"})
+	assertBalances(t, l, 2, [3]string{"USDT", lastTick, "0"})
+	require.EqualValues(t, 2, entryCount(t, db, "deposit"))
+	assertSupply(t, db, "USDT", "999999999999999999.99999999")
+}
+
+func TestConcurrentDepositsDeduplicateAtAssetCapacity(t *testing.T) {
+	db := mysqltest.Open(t)
+	l := ledger.New(db, nil)
+	ctx := t.Context()
+
+	// From a fresh asset, one credit fits and two would exceed the cap.
+	const funds = "500000000000000000"
+	const calls = 4
+	type outcome struct {
+		userID int64
+		err    error
+	}
+	start := make(chan struct{})
+	results := make(chan outcome, calls)
+	for i := range calls {
+		userID := int64(i%2 + 1)
+		go func() {
+			<-start
+			_, err := l.Deposit(ctx, userID, "USDT", amount(funds), fmt.Sprintf("fund-%d", userID))
+			results <- outcome{userID, err}
+		}()
+	}
+	close(start)
+	var outcomes [calls]outcome
+	for i := range outcomes {
+		outcomes[i] = <-results
+	}
+
+	var winner int64
+	var successes int
+	for _, result := range outcomes {
+		if result.err != nil {
+			require.ErrorIs(t, result.err, ledger.ErrBalanceCapacity)
+			continue
+		}
+		if winner == 0 {
+			winner = result.userID
+		}
+		require.Equal(t, winner, result.userID, "only one user can receive the credit")
+		successes++
+	}
+	require.Equal(t, 2, successes, "the winning deposit and its replay must both succeed")
+	assertBalances(t, l, winner, [3]string{"USDT", funds, "0"})
+	assertBalances(t, l, 3-winner)
+	require.EqualValues(t, 1, entryCount(t, db, "deposit"))
+	assertSupply(t, db, "USDT", funds)
+}
+
+func TestDepositRollsBackIssuanceWhenBalanceWriteFails(t *testing.T) {
+	db := mysqltest.Open(t)
+	l := ledger.New(db, nil)
+	ctx := t.Context()
+	const funds = "999999999999999999.99999999"
+	const refID = "fund"
+	require.NoError(t, db.Exec(`ALTER TABLE balances ADD CONSTRAINT reject_test_user CHECK (user_id <> 1)`).Error)
+	_, err := l.Deposit(ctx, 1, "USDT", amount(funds), refID)
+	require.Error(t, err)
+	require.EqualValues(t, 0, entryCount(t, db, "deposit"))
+	assertBalances(t, l, 1)
+
+	require.NoError(t, db.Exec(`ALTER TABLE balances DROP CHECK reject_test_user`).Error)
+	_, err = l.Deposit(ctx, 1, "USDT", amount(funds), refID)
+	require.NoError(t, err, "the failed balance write must leave issuance capacity available")
+	assertBalances(t, l, 1, [3]string{"USDT", funds, "0"})
+	assertSupply(t, db, "USDT", funds)
+}
+
 func TestConcurrentFreezeCannotOverdraw(t *testing.T) {
 	db := mysqltest.Open(t)
 	l := ledger.New(db, nil)
@@ -153,28 +250,41 @@ func TestSettlementUnderflowRollsBackAllLegs(t *testing.T) {
 	require.EqualValues(t, 1, rows, "the transaction must also roll back newly seeded rows")
 }
 
-func TestSettlementCapacityRollsBackAllLegs(t *testing.T) {
+func TestSettlementPreservesIssuanceAtAssetCapacity(t *testing.T) {
 	db := mysqltest.Open(t)
 	l := ledger.New(db, nil)
 	ctx := t.Context()
+	// Seed sub-tick dust to reach the exact storage maximum with scale-8 deposits.
+	const dust = "0.000000009999999999"
+	const quoteSupply = "999999999999999999.999999999999999999"
+	const sellerQuote = "999999999999999969.99999999"
+	require.NoError(t, db.Exec(`INSERT INTO asset_supply (asset, total_issued) VALUES ('USDT', ?)`, dust).Error)
+	require.NoError(t, db.Exec(`INSERT INTO balances (user_id, asset, available) VALUES (3, 'USDT', ?)`, dust).Error)
+	require.NoError(t, db.Exec(`INSERT INTO ledger_entries
+		(ref_type, ref_id, leg, user_id, asset, delta_available, delta_frozen)
+		VALUES ('deposit', 'dust', 0, 3, 'USDT', ?, 0)`, dust).Error)
+
 	_, err := l.Deposit(ctx, 1, "USDT", amount("30"), "fund-buyer")
 	require.NoError(t, err)
 	_, err = l.Deposit(ctx, 2, "BTC", amount("4"), "fund-seller")
 	require.NoError(t, err)
-	_, err = l.Deposit(ctx, 2, "USDT", amount("999999999999999999.99999999"), "fund-seller-quote")
+	_, err = l.Deposit(ctx, 2, "USDT", amount(sellerQuote), "fund-seller-quote")
 	require.NoError(t, err)
+	assertSupply(t, db, "USDT", quoteSupply)
 	require.NoError(t, l.Freeze(ctx, 1, "USDT", amount("24"), "buy"))
 	require.NoError(t, l.Freeze(ctx, 2, "BTC", amount("2"), "sell"))
 	require.NoError(t, l.Freeze(ctx, 2, "USDT", amount("20"), "reserve-quote"))
 
-	// The last leg credits the seller's quote balance. Failure must undo every earlier leg.
-	require.ErrorIs(t, l.SettleTrade(ctx, trade(1, 2)), ledger.ErrBalanceCapacity)
-	assertBalances(t, l, 1, [3]string{"USDT", "6", "24"})
-	assertBalances(t, l, 2, [3]string{"BTC", "2", "2"}, [3]string{"USDT", "999999999999999979.99999999", "20"})
-	require.Zero(t, entryCount(t, db, "trade"))
-	var rows int64
-	require.NoError(t, db.Model(&model.Balance{}).Count(&rows).Error)
-	require.EqualValues(t, 3, rows, "the transaction must also roll back the newly seeded buyer base row")
+	require.NoError(t, l.SettleTrade(ctx, trade(1, 2)))
+	assertBalances(t, l, 1, [3]string{"BTC", "2", "0"}, [3]string{"USDT", "10", "0"})
+	assertBalances(t, l, 2, [3]string{"BTC", "2", "0"}, [3]string{"USDT", sellerQuote, "20"})
+	require.EqualValues(t, 4, entryCount(t, db, "trade"))
+
+	require.NoError(t, l.Unfreeze(ctx, 2, "USDT", amount("20"), "reserve-quote"))
+	assertBalances(t, l, 2, [3]string{"BTC", "2", "0"}, [3]string{"USDT", "999999999999999989.99999999", "0"})
+	assertBalances(t, l, 3, [3]string{"USDT", dust, "0"})
+	assertSupply(t, db, "USDT", quoteSupply)
+	assertSupply(t, db, "BTC", "4")
 }
 
 func TestSelfTradeKeepsFourDistinctLegs(t *testing.T) {
@@ -225,6 +335,13 @@ func entryCount(t *testing.T, db *gorm.DB, refType string) int64 {
 	var count int64
 	require.NoError(t, db.Model(&model.LedgerEntry{}).Where("ref_type = ?", refType).Count(&count).Error)
 	return count
+}
+
+func assertSupply(t *testing.T, db *gorm.DB, asset, want string) {
+	t.Helper()
+	var issued decimal.Decimal
+	require.NoError(t, db.WithContext(t.Context()).Raw("SELECT total_issued FROM asset_supply WHERE asset = ?", asset).Row().Scan(&issued))
+	require.Equal(t, want, issued.String())
 }
 
 func amount(s string) decimal.Decimal { return decimal.RequireFromString(s) }

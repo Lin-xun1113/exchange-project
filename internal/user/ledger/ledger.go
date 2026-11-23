@@ -111,6 +111,17 @@ type leg struct {
 	dAvail, dFrozen decimal.Decimal
 }
 
+const maxStorageAmount = `CAST('999999999999999999.999999999999999999' AS DECIMAL(36,18))`
+
+const seedSupply = `
+INSERT INTO asset_supply (asset, total_issued) VALUES (?, 0)
+ON DUPLICATE KEY UPDATE asset = asset_supply.asset`
+
+const increaseSupply = `
+UPDATE asset_supply
+SET total_issued = total_issued + CAST(? AS DECIMAL(36,18))
+WHERE asset = ? AND total_issued + CAST(? AS DECIMAL(36,18)) <= ` + maxStorageAmount
+
 const seedBalance = `
 INSERT INTO balances (user_id, asset, available, frozen, updated_at)
 VALUES (?, ?, 0, 0, NOW(6))
@@ -126,8 +137,7 @@ SET available = available + CAST(? AS DECIMAL(36,18)),
 WHERE user_id = ? AND asset = ?
   AND available + CAST(? AS DECIMAL(36,18)) >= 0
   AND frozen + CAST(? AS DECIMAL(36,18)) >= 0
-  AND available + frozen + CAST(? AS DECIMAL(36,18)) + CAST(? AS DECIMAL(36,18))
-      <= CAST('999999999999999999.999999999999999999' AS DECIMAL(36,18))`
+  AND available + frozen + CAST(? AS DECIMAL(36,18)) + CAST(? AS DECIMAL(36,18)) <= ` + maxStorageAmount
 
 func (l *Ledger) post(ctx context.Context, refType, refID string, legs []leg) error {
 	result := "error"
@@ -173,6 +183,21 @@ func (l *Ledger) post(ctx context.Context, refType, refID string, legs []leg) er
 				}
 			}
 			for i, entry := range entries {
+				dAvail, dFrozen := entry.DeltaAvailable.String(), entry.DeltaFrozen.String()
+				if refType == "deposit" {
+					// The ledger key has been claimed. Serialize issuance for this asset
+					// before changing the balance; both writes roll back together.
+					if err := tx.Exec(seedSupply, entry.Asset).Error; err != nil {
+						return err
+					}
+					res := tx.Exec(increaseSupply, dAvail, entry.Asset, dAvail)
+					if res.Error != nil {
+						return res.Error
+					}
+					if res.RowsAffected == 0 {
+						return ErrBalanceCapacity
+					}
+				}
 				if i == 0 || entry.UserID != entries[i-1].UserID || entry.Asset != entries[i-1].Asset {
 					// MySQL checks the proposed INSERT row even when the key already
 					// exists. Seed with zeros, then apply signed deltas under the same lock.
@@ -180,7 +205,6 @@ func (l *Ledger) post(ctx context.Context, refType, refID string, legs []leg) er
 						return err
 					}
 				}
-				dAvail, dFrozen := entry.DeltaAvailable.String(), entry.DeltaFrozen.String()
 				res := tx.Exec(updateBalance, dAvail, dFrozen, entry.UserID, entry.Asset, dAvail, dFrozen, dAvail, dFrozen)
 				if res.Error != nil {
 					return res.Error

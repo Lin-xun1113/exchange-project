@@ -48,6 +48,7 @@ FROM grpc-runtime AS matching-svc
 COPY --from=builder /out/matching-svc /usr/local/bin/matching-svc
 RUN mkdir -p /data/wal /data/snapshot && chown -R app:app /data
 VOLUME ["/data"]
+ENV WAL_DIR=/data/wal SNAPSHOT_DIR=/data/snapshot
 USER app
 EXPOSE 50053
 HEALTHCHECK --interval=5s --timeout=5s --start-period=10s --retries=5 \
