@@ -8,7 +8,7 @@ RUN go mod download
 
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/ \
-    ./cmd/gateway ./cmd/user-svc ./cmd/order-svc ./cmd/matching-svc
+    ./cmd/gateway ./cmd/user-svc ./cmd/order-svc ./cmd/matching-svc ./cmd/demo-seed
 
 FROM alpine:3.20 AS runtime
 RUN apk add --no-cache ca-certificates tzdata \
@@ -54,3 +54,8 @@ EXPOSE 50053
 HEALTHCHECK --interval=5s --timeout=5s --start-period=10s --retries=5 \
     CMD ["grpc_health_probe", "-addr=127.0.0.1:50053"]
 CMD ["matching-svc"]
+
+FROM runtime AS demo-seed
+COPY --from=builder /out/demo-seed /usr/local/bin/demo-seed
+USER app
+CMD ["demo-seed"]

@@ -121,6 +121,34 @@ services:
       - matching_data:/data
     networks: [exchange-network]
 
+  demo-seed:
+    profiles: [demo]
+    build: {context: ., target: demo-seed}
+    environment:
+      <<: [*app-env, *db-env, *grpc-env]
+    restart: "no"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      user-svc:
+        condition: service_healthy
+      order-svc:
+        condition: service_healthy
+      matching-svc:
+        condition: service_healthy
+    networks: [exchange-network]
+
+  web:
+    profiles: [demo]
+    build: ./web
+    ports: ["8088:80"]
+    depends_on:
+      gateway:
+        condition: service_healthy
+      demo-seed:
+        condition: service_completed_successfully
+    networks: [exchange-network]
+
 volumes:
   mysql_data:
   redis_data:

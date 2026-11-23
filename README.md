@@ -25,6 +25,18 @@ go test -race ./internal/matching/... ./internal/gateway/...
 
 E2E 需要 `curl` 和 `jq`，默认访问本地网关，可用 `GATEWAY_URL` 覆盖。脚本会重启当前 Compose 项目的 `matching-svc`，并短暂停止 `order-svc` 验证就绪检查。
 
+## 演示交易台
+
+先停止占用相同宿主机端口的后端栈，再用独立的 Compose 项目启动：
+
+```bash
+COMPOSE_PROJECT_NAME=exchange-demo docker compose --profile demo up -d --build
+```
+
+种子写入成功后，打开 `http://localhost:8088`，使用 `demo` / `demo1234` 登录。首启写入七天历史成交、实时订单簿和演示委托；完成后不再自动生成成交。默认 profile 不启用种子或 Web，仍可独立运行 E2E。
+
+演示种子要求新卷；识别到已写入的历史成交会直接退出，不会补写实时订单簿。若初始化中断或未看到 `demo seed complete`，请改用新的 Compose 项目名，不要清除仍需保留的卷。
+
 ## 服务边界
 
 | 服务 | 责任 |
@@ -69,6 +81,9 @@ E2E 需要 `curl` 和 `jq`，默认访问本地网关，可用 `GATEWAY_URL` 覆
 | GET | `/api/v1/orders` | 游标分页查询自己的订单 |
 | GET | `/api/v1/trades` | 游标分页查询自己的成交 |
 | GET | `/api/v1/market/orderbook/:symbol` | 查询公开盘口 |
+| GET | `/api/v1/market/trades/:symbol` | 查询公开成交，`limit` 默认 50、最大 200 |
+| GET | `/api/v1/market/candles/:symbol` | 查询 K 线，`interval` 默认 `15m`，`limit` 默认 300、最大 1000 |
+| GET | `/api/v1/market/tickers` | 查询 24 小时行情，可用逗号分隔的 `symbols` 筛选 |
 | GET | `/healthz` | 查询网关存活状态 |
 | GET | `/readyz` | 检查三个 gRPC 服务与 Redis |
 
