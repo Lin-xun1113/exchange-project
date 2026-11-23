@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func intLess(a, b int) bool { return a < b }
+func intLess(a, b int) bool         { return a < b }
 func float64Less(a, b float64) bool { return a < b }
 
 func TestSkipList_InsertAndSearch(t *testing.T) {

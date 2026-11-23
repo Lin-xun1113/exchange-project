@@ -1,10 +1,6 @@
 package book
 
-// 此处跳表的mutex锁为防御性冗余设计，实际SkipList在actor单线程的Orderbook里跑，不需要加锁，可删除
-import (
-	"math/rand"
-	"sync"
-)
+import "math/rand/v2"
 
 const (
 	MaxLevel = 32
@@ -27,7 +23,7 @@ type SkipList[K any] struct {
 	header   *SkipListNode[K]
 	level    int
 	length   int
-	mu       sync.Mutex
+	tail     *SkipListNode[K]
 	maxLevel int
 	prob     float64
 }
@@ -61,10 +57,7 @@ func (sl *SkipList[K]) randomLevel() int {
 // Insert inserts a key into the skip list.
 // If the key already exists, returns the existing node without inserting.
 func (sl *SkipList[K]) Insert(key K) *SkipListNode[K] {
-	sl.mu.Lock()
-	defer sl.mu.Unlock()
-
-	update := make([]*SkipListNode[K], sl.maxLevel)
+	var update [MaxLevel]*SkipListNode[K]
 	curr := sl.header
 
 	for i := sl.level - 1; i >= 0; i-- {
@@ -97,11 +90,13 @@ func (sl *SkipList[K]) Insert(key K) *SkipListNode[K] {
 		update[i].Forward[i] = node
 	}
 
-	if rl > 0 {
+	if update[0] != sl.header {
 		node.Backward = update[0]
-		if node.Forward[0] != nil {
-			node.Forward[0].Backward = node
-		}
+	}
+	if node.Forward[0] != nil {
+		node.Forward[0].Backward = node
+	} else {
+		sl.tail = node
 	}
 
 	sl.length++
@@ -111,9 +106,6 @@ func (sl *SkipList[K]) Insert(key K) *SkipListNode[K] {
 // Search searches for a key in the skip list.
 // Returns the node with the exact key, or nil if not found.
 func (sl *SkipList[K]) Search(key K) *SkipListNode[K] {
-	sl.mu.Lock()
-	defer sl.mu.Unlock()
-
 	curr := sl.header
 	for i := sl.level - 1; i >= 0; i-- {
 		for curr.Forward[i] != nil && sl.less(curr.Forward[i].Key, key) {
@@ -130,9 +122,6 @@ func (sl *SkipList[K]) Search(key K) *SkipListNode[K] {
 // Seek returns the first node with key >= given key (lower bound).
 // Returns nil only if the skip list is empty.
 func (sl *SkipList[K]) Seek(key K) *SkipListNode[K] {
-	sl.mu.Lock()
-	defer sl.mu.Unlock()
-
 	curr := sl.header
 	for i := sl.level - 1; i >= 0; i-- {
 		for curr.Forward[i] != nil && sl.less(curr.Forward[i].Key, key) {
@@ -154,10 +143,7 @@ func (sl *SkipList[K]) Seek(key K) *SkipListNode[K] {
 // Delete removes a key from the skip list.
 // Returns true if a node was removed, false otherwise.
 func (sl *SkipList[K]) Delete(key K) bool {
-	sl.mu.Lock()
-	defer sl.mu.Unlock()
-
-	update := make([]*SkipListNode[K], sl.maxLevel)
+	var update [MaxLevel]*SkipListNode[K]
 	curr := sl.header
 
 	for i := sl.level - 1; i >= 0; i-- {
@@ -174,9 +160,8 @@ func (sl *SkipList[K]) Delete(key K) bool {
 
 	if curr.Forward[0] != nil {
 		curr.Forward[0].Backward = curr.Backward
-	}
-	if curr.Backward != nil {
-		curr.Backward.Forward[0] = curr.Forward[0]
+	} else {
+		sl.tail = curr.Backward
 	}
 
 	for i := 0; i < sl.level; i++ {
@@ -195,40 +180,22 @@ func (sl *SkipList[K]) Delete(key K) bool {
 
 // Len returns the number of elements in the skip list.
 func (sl *SkipList[K]) Len() int {
-	sl.mu.Lock()
-	defer sl.mu.Unlock()
 	return sl.length
 }
 
 // IsEmpty returns true if the skip list is empty.
 func (sl *SkipList[K]) IsEmpty() bool {
-	sl.mu.Lock()
-	defer sl.mu.Unlock()
 	return sl.length == 0
 }
 
 // SeekFirst returns the first node in the skip list (lowest key).
 func (sl *SkipList[K]) SeekFirst() *SkipListNode[K] {
-	sl.mu.Lock()
-	defer sl.mu.Unlock()
 	return sl.header.Forward[0]
 }
 
 // SeekLast returns the last node in the skip list (highest key).
 func (sl *SkipList[K]) SeekLast() *SkipListNode[K] {
-	sl.mu.Lock()
-	defer sl.mu.Unlock()
-
-	curr := sl.header
-	for i := sl.level - 1; i >= 0; i-- {
-		for curr.Forward[i] != nil {
-			curr = curr.Forward[i]
-		}
-	}
-	if curr == sl.header {
-		return nil
-	}
-	return curr
+	return sl.tail
 }
 
 // Next returns the next node in the skip list.
@@ -242,24 +209,4 @@ func (n *SkipListNode[K]) Next() *SkipListNode[K] {
 // Prev returns the previous node in the skip list.
 func (n *SkipListNode[K]) Prev() *SkipListNode[K] {
 	return n.Backward
-}
-
-// SkipListIterator iterates over a skip list.
-type SkipListIterator[K any] struct {
-	sl   *SkipList[K]
-	node *SkipListNode[K]
-}
-
-// Iter returns an iterator starting from the given node.
-func (sl *SkipList[K]) Iter(node *SkipListNode[K]) *SkipListIterator[K] {
-	return &SkipListIterator[K]{sl: sl, node: node}
-}
-
-// Next returns the next node in the iteration.
-func (it *SkipListIterator[K]) Next() *SkipListNode[K] {
-	if it.node == nil {
-		return nil
-	}
-	it.node = it.node.Next()
-	return it.node
 }

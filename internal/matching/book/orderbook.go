@@ -1,635 +1,320 @@
+// Package book implements the mutable order book owned by a single matching actor.
 package book
 
 import (
+	"container/list"
+	"errors"
 	"fmt"
-	"sort"
-	"sync"
-	"time"
-
-	"github.com/linxun2025/exchange-project/internal/model"
-	"github.com/shopspring/decimal"
+	"math"
 )
 
-// OrderInBook 订单簿中的订单
-type OrderInBook struct {
-	ID             int64             `json:"id"`
-	OrderID        string            `json:"order_id"`
-	UserID         int64             `json:"user_id"`
-	Symbol         string            `json:"symbol"`
-	Side           model.OrderSide   `json:"side"`
-	OrderType      model.OrderType   `json:"order_type"`
-	Price          decimal.Decimal   `json:"price"`
-	Quantity       decimal.Decimal   `json:"quantity"`
-	FilledQuantity decimal.Decimal   `json:"filled_quantity"`
-	RemainingQty   decimal.Decimal   `json:"remaining_quantity"`
-	UnfilledQty    decimal.Decimal   `json:"unfilled_quantity"`
-	Status         model.OrderStatus `json:"status"`
-	CreatedAt      int64             `json:"created_at"` // 纳秒时间戳，用于 FIFO
+type Side uint8
+
+const (
+	Buy Side = iota + 1
+	Sell
+)
+
+type Kind uint8
+
+const (
+	Limit Kind = iota + 1
+	Market
+	IOC
+	FOK
+)
+
+type Reject uint8
+
+const (
+	RejectNone Reject = iota
+	RejectFOKUnfilled
+	RejectNoLiquidity
+)
+
+const maxFillsPerSubmit = 512 // Keeps the unary response and settlement transaction bounded.
+
+var (
+	ErrLevelOverflow = errors.New("price level quantity exceeds int64 ticks")
+	errFillLimit     = errors.New("submit would exceed the fill limit")
+)
+
+// Order is the validated input to a single book. Prices and quantities are in
+// 1e-8 ticks. Market orders ignore Price.
+type Order struct {
+	ID         string
+	UserID     int64
+	Side       Side
+	Kind       Kind
+	Price, Qty int64
 }
 
-// NewOrderInBook 从订单创建订单簿订单
-func NewOrderInBook(id int64, orderID string, userID int64, symbol string, side model.OrderSide, orderType model.OrderType, price, quantity decimal.Decimal) *OrderInBook {
-	return &OrderInBook{
-		ID:             id,
-		OrderID:        orderID,
-		UserID:         userID,
-		Symbol:         symbol,
-		Side:           side,
-		OrderType:      orderType,
-		Price:          price,
-		Quantity:       quantity,
-		FilledQuantity: decimal.Zero,
-		RemainingQty:   quantity,
-		UnfilledQty:    decimal.Zero,
-		Status:         model.OrderStatusPending,
-		CreatedAt:      time.Now().UnixNano(),
+type Fill struct {
+	MakerID     string
+	MakerUserID int64
+	Price, Qty  int64
+}
+
+type Result struct {
+	Fills             []Fill
+	Filled, Remaining int64
+	Resting           bool
+	Reject            Reject
+}
+
+type Resting struct {
+	ID        string
+	UserID    int64
+	Side      Side
+	Price     int64
+	Remaining int64
+}
+
+type Level struct {
+	Price, Qty int64
+	Orders     int
+}
+
+type level struct {
+	total  int64
+	orders list.List
+}
+
+type restingOrder struct {
+	Resting
+	level *level
+}
+
+type side struct {
+	bids   bool
+	prices *SkipList[int64]
+	levels map[int64]*level
+}
+
+func newSide(bids bool) side {
+	return side{
+		bids:   bids,
+		prices: NewSkipList(func(a, b int64) bool { return a < b }),
+		levels: make(map[int64]*level),
 	}
 }
 
-// Fill 成交
-func (o *OrderInBook) Fill(qty decimal.Decimal) {
-	o.FilledQuantity = o.FilledQuantity.Add(qty)
-	o.RemainingQty = o.RemainingQty.Sub(qty)
-	if o.RemainingQty.IsZero() {
-		o.Status = model.OrderStatusFilled
-	} else {
-		o.Status = model.OrderStatusPartialFilled
+func (s *side) best() *SkipListNode[int64] {
+	if s.bids {
+		return s.prices.SeekLast()
 	}
+	return s.prices.SeekFirst()
 }
 
-// CanMatch 判断是否可以成交
-func (o *OrderInBook) CanMatch(price decimal.Decimal) bool {
-	switch o.Side {
-	case model.OrderSideBuy:
-		return o.Price.GreaterThanOrEqual(price)
-	case model.OrderSideSell:
-		return o.Price.LessThanOrEqual(price)
+func (s *side) next(n *SkipListNode[int64]) *SkipListNode[int64] {
+	if s.bids {
+		return n.Prev()
 	}
-	return false
+	return n.Next()
 }
 
-// CanMatchForMarket 市场订单跳过价格限制
-func (o *OrderInBook) CanMatchForMarket(_ decimal.Decimal) bool {
-	return true
+func (s *side) remove(price int64) {
+	delete(s.levels, price)
+	s.prices.Delete(price)
 }
 
-// IsFilled 检查是否完全成交
-func (o *OrderInBook) IsFilled() bool {
-	return o.RemainingQty.IsZero()
+// Book has no synchronization. Its owner serializes all reads and writes.
+type Book struct {
+	bids, asks side
+	index      map[string]*list.Element
 }
 
-// IsActive 检查是否活跃
-func (o *OrderInBook) IsActive() bool {
-	return o.Status == model.OrderStatusPending || o.Status == model.OrderStatusPartialFilled
+func New() *Book {
+	return &Book{bids: newSide(true), asks: newSide(false), index: make(map[string]*list.Element)}
 }
 
-// Trade 交易记录
-type Trade struct {
-	ID          int64           `json:"id"`
-	TradeID     string          `json:"trade_id"`
-	BuyOrderID  string          `json:"buy_order_id"`
-	SellOrderID string          `json:"sell_order_id"`
-	BuyUserID   int64           `json:"buy_user_id"`
-	SellUserID  int64           `json:"sell_user_id"`
-	Symbol      string          `json:"symbol"`
-	Price       decimal.Decimal `json:"price"`
-	Quantity    decimal.Decimal `json:"quantity"`
-	CreatedAt   int64           `json:"created_at"`
-}
-
-// PriceLevel represents a price level in the order book.
-type PriceLevel struct {
-	Price  float64
-	Orders []*OrderInBook
-}
-
-// OrderBook 订单簿
-type OrderBook struct {
-	symbol      string
-	mu          sync.RWMutex            // protects all fields below during concurrent reads/writes
-	buyOrders   []*OrderInBook          // 买单列表，按价格降序
-	sellOrders  []*OrderInBook          // 卖单列表，按价格升序
-	bids        *SkipList[float64]      // 价格索引：最高买价 = SeekLast()
-	asks        *SkipList[float64]      // 价格索引：最低卖价 = SeekFirst()
-	priceLevels map[float64]*PriceLevel // 价格级别映射
-}
-
-// NewOrderBook 创建新的订单簿
-func NewOrderBook(symbol string) *OrderBook {
-	return &OrderBook{
-		symbol:      symbol,
-		buyOrders:   make([]*OrderInBook, 0),
-		sellOrders:  make([]*OrderInBook, 0),
-		bids:        NewSkipList(func(a, b float64) bool { return a < b }),
-		asks:        NewSkipList(func(a, b float64) bool { return a < b }),
-		priceLevels: make(map[float64]*PriceLevel),
+func (b *Book) sides(s Side) (own, opposite *side) {
+	if s == Buy {
+		return &b.bids, &b.asks
 	}
+	return &b.asks, &b.bids
 }
 
-// GetSymbol 返回交易对
-func (ob *OrderBook) GetSymbol() string {
-	return ob.symbol
+func (o Order) crosses(price int64) bool {
+	return o.Kind == Market || (o.Side == Buy && o.Price >= price) || (o.Side == Sell && o.Price <= price)
 }
 
-// AddOrder 添加订单并尝试撮合
-func (ob *OrderBook) AddOrder(order *OrderInBook) (trades []*Trade, err error) {
-
-	var tradesList []*Trade
-
-	// Save opposite order state for FOK rollback
-	type restoredOrder struct {
-		opp           *OrderInBook
-		filledOrig    decimal.Decimal
-		remainingOrig decimal.Decimal
-		statusOrig    model.OrderStatus
+// unfilled estimates the remainder without mutation. Subtracting the available
+// volume from the request avoids summing quantities from multiple levels.
+func unfilled(o Order, opposite *side) int64 {
+	remaining := o.Qty
+	for n := opposite.best(); n != nil && o.crosses(n.Key); n = opposite.next(n) {
+		qty := opposite.levels[n.Key].total
+		if qty >= remaining {
+			return 0
+		}
+		remaining -= qty
 	}
-	var restored []*restoredOrder
+	return remaining
+}
 
-	// 尝试撮合
-	if order.Side == model.OrderSideBuy {
-		// 遍历所有卖单（从最低价开始）
-		for node := ob.asks.SeekFirst(); node != nil; node = node.Next() {
-			pl := ob.priceLevels[node.Key]
-			if pl == nil {
-				continue
+// CheckSubmit verifies both capacity limits before an actor persists an order.
+// Full levels can be checked by their count and aggregate volume. Only a final
+// partial level may require looking at individual makers.
+func (b *Book) CheckSubmit(o Order) error {
+	own, opposite := b.sides(o.Side)
+	remaining, budget := o.Qty, maxFillsPerSubmit
+	for n := opposite.best(); n != nil && remaining > 0 && o.crosses(n.Key); n = opposite.next(n) {
+		l := opposite.levels[n.Key]
+		if remaining >= l.total {
+			if l.orders.Len() > budget {
+				return errFillLimit
 			}
-			// 按时间戳升序遍历该价格级别的订单
-			sort.Slice(pl.Orders, func(i, j int) bool {
-				return pl.Orders[i].CreatedAt < pl.Orders[j].CreatedAt
-			})
-			for _, opp := range pl.Orders {
-				if !opp.IsActive() {
-					continue
-				}
-				canMatch := false
-				if order.OrderType == model.OrderTypeMarket {
-					canMatch = true
-				} else {
-					canMatch = order.CanMatch(opp.Price)
-				}
-				if !canMatch {
-					break
-				}
-				// Save state for FOK rollback
-				restored = append(restored, &restoredOrder{
-					opp:           opp,
-					filledOrig:    opp.FilledQuantity,
-					remainingOrig: opp.RemainingQty,
-					statusOrig:    opp.Status,
-				})
-				filledQty := decimal.Min(order.RemainingQty, opp.RemainingQty)
-				trade := &Trade{
-					TradeID:     GenerateTradeID(),
-					BuyOrderID:  order.OrderID,
-					SellOrderID: opp.OrderID,
-					BuyUserID:   order.UserID,
-					SellUserID:  opp.UserID,
-					Symbol:      ob.symbol,
-					Price:       opp.Price,
-					Quantity:    filledQty,
-					CreatedAt:   time.Now().UnixNano(),
-				}
-				tradesList = append(tradesList, trade)
-				order.Fill(filledQty)
-				opp.Fill(filledQty)
-				if order.IsFilled() {
-					break
-				}
+			remaining -= l.total
+			budget -= l.orders.Len()
+			continue
+		}
+		if l.orders.Len() <= budget {
+			remaining = 0
+			break
+		}
+		for e := l.orders.Front(); remaining > 0; e = e.Next() {
+			if budget == 0 {
+				return errFillLimit
 			}
-			if order.IsFilled() {
-				break
-			}
+			remaining -= min(remaining, e.Value.(*restingOrder).Remaining)
+			budget--
 		}
-	} else {
-		// 遍历所有买单（从最高价开始）
-		for node := ob.bids.SeekLast(); node != nil; node = node.Prev() {
-			pl := ob.priceLevels[node.Key]
-			if pl == nil {
-				continue
-			}
-			sort.Slice(pl.Orders, func(i, j int) bool {
-				return pl.Orders[i].CreatedAt < pl.Orders[j].CreatedAt
-			})
-			for _, opp := range pl.Orders {
-				if !opp.IsActive() {
-					continue
-				}
-				canMatch := false
-				if order.OrderType == model.OrderTypeMarket {
-					canMatch = true
-				} else {
-					canMatch = order.CanMatch(opp.Price)
-				}
-				if !canMatch {
-					break
-				}
-				// Save state for FOK rollback
-				restored = append(restored, &restoredOrder{
-					opp:           opp,
-					filledOrig:    opp.FilledQuantity,
-					remainingOrig: opp.RemainingQty,
-					statusOrig:    opp.Status,
-				})
-				filledQty := decimal.Min(order.RemainingQty, opp.RemainingQty)
-				trade := &Trade{
-					TradeID:     GenerateTradeID(),
-					BuyOrderID:  opp.OrderID,
-					SellOrderID: order.OrderID,
-					BuyUserID:   opp.UserID,
-					SellUserID:  order.UserID,
-					Symbol:      ob.symbol,
-					Price:       opp.Price,
-					Quantity:    filledQty,
-					CreatedAt:   time.Now().UnixNano(),
-				}
-				tradesList = append(tradesList, trade)
-				order.Fill(filledQty)
-				opp.Fill(filledQty)
-				if order.IsFilled() {
-					break
-				}
-			}
-			if order.IsFilled() {
-				break
-			}
-		}
+		break
 	}
-
-	// FOK 回滚检查：在清理前执行，否则对侧订单已被清理
-	if order.OrderType == model.OrderTypeFOK && order.RemainingQty.GreaterThan(decimal.Zero) {
-		// 回滚对侧订单状态
-		for _, r := range restored {
-			r.opp.FilledQuantity = r.filledOrig
-			r.opp.RemainingQty = r.remainingOrig
-			r.opp.Status = r.statusOrig
-		}
-		order.UnfilledQty = order.RemainingQty
-		order.Status = model.OrderStatusRejected
-		return nil, fmt.Errorf("FOK requires full fill")
-	}
-
-	// 清理已完全成交的订单
-	ob.cleanupOrdersInternal()
-
-	// 订单类型后处理
-	switch order.OrderType {
-	case model.OrderTypeMarket:
-		if order.RemainingQty.GreaterThan(decimal.Zero) {
-			order.UnfilledQty = order.RemainingQty
-		}
-		order.Status = model.OrderStatusFilled
-
-	case model.OrderTypeIOC:
-		if order.RemainingQty.GreaterThan(decimal.Zero) {
-			order.UnfilledQty = order.RemainingQty
-		}
-		order.Status = model.OrderStatusFilled
-
-	case model.OrderTypeLimit:
-		if !order.IsFilled() && order.IsActive() {
-			ob.addToBookInternal(order)
-		}
-	}
-
-	return tradesList, nil
-}
-
-// addToBookInternal 添加订单到订单簿（内部方法，调用前需持有锁）
-func (ob *OrderBook) addToBookInternal(order *OrderInBook) {
-	price := order.Price.InexactFloat64()
-
-	// 使用 skip list 查找或创建价格级别
-	node := ob.asks.Seek(price)
-	var pl *PriceLevel
-	if order.Side == model.OrderSideBuy {
-		node = ob.bids.Seek(price)
-		if node != nil && node.Key == price {
-			pl = ob.priceLevels[price]
-		} else {
-			node = ob.bids.Insert(price)
-			pl = &PriceLevel{Price: price, Orders: make([]*OrderInBook, 0)}
-			ob.priceLevels[price] = pl
-		}
-	} else {
-		if node != nil && node.Key == price {
-			pl = ob.priceLevels[price]
-		} else {
-			node = ob.asks.Insert(price)
-			pl = &PriceLevel{Price: price, Orders: make([]*OrderInBook, 0)}
-			ob.priceLevels[price] = pl
-		}
-	}
-
-	pl.Orders = append(pl.Orders, order)
-
-	switch order.Side {
-	case model.OrderSideBuy:
-		inserted := false
-		for i := 0; i < len(ob.buyOrders); i++ {
-			if order.Price.GreaterThan(ob.buyOrders[i].Price) {
-				ob.buyOrders = append(ob.buyOrders[:i], append([]*OrderInBook{order}, ob.buyOrders[i:]...)...)
-				inserted = true
-				break
-			}
-		}
-		if !inserted {
-			ob.buyOrders = append(ob.buyOrders, order)
-		}
-	case model.OrderSideSell:
-		inserted := false
-		for i := 0; i < len(ob.sellOrders); i++ {
-			if order.Price.LessThan(ob.sellOrders[i].Price) {
-				ob.sellOrders = append(ob.sellOrders[:i], append([]*OrderInBook{order}, ob.sellOrders[i:]...)...)
-				inserted = true
-				break
-			}
-		}
-		if !inserted {
-			ob.sellOrders = append(ob.sellOrders, order)
-		}
-	}
-}
-
-// removePriceLevel removes a price level from the skip list and priceLevels map.
-func (ob *OrderBook) removePriceLevel(price float64, side model.OrderSide) {
-	if side == model.OrderSideBuy {
-		ob.bids.Delete(price)
-	} else {
-		ob.asks.Delete(price)
-	}
-	delete(ob.priceLevels, price)
-}
-
-// cleanupOrdersInternal 清理已完全成交的订单（内部方法，调用前需持有锁）
-func (ob *OrderBook) cleanupOrdersInternal() {
-	// 清理买单
-	newBuyOrders := make([]*OrderInBook, 0, len(ob.buyOrders))
-	for _, o := range ob.buyOrders {
-		if o.IsActive() {
-			newBuyOrders = append(newBuyOrders, o)
-		} else {
-			// 从价格级别中移除
-			price := o.Price.InexactFloat64()
-			pl := ob.priceLevels[price]
-			if pl != nil {
-				newOrders := make([]*OrderInBook, 0, len(pl.Orders))
-				for _, ord := range pl.Orders {
-					if ord.OrderID != o.OrderID {
-						newOrders = append(newOrders, ord)
-					}
-				}
-				pl.Orders = newOrders
-				if len(pl.Orders) == 0 {
-					ob.removePriceLevel(price, model.OrderSideBuy)
-				}
-			}
-		}
-	}
-	ob.buyOrders = newBuyOrders
-
-	// 清理卖单
-	newSellOrders := make([]*OrderInBook, 0, len(ob.sellOrders))
-	for _, o := range ob.sellOrders {
-		if o.IsActive() {
-			newSellOrders = append(newSellOrders, o)
-		} else {
-			price := o.Price.InexactFloat64()
-			pl := ob.priceLevels[price]
-			if pl != nil {
-				newOrders := make([]*OrderInBook, 0, len(pl.Orders))
-				for _, ord := range pl.Orders {
-					if ord.OrderID != o.OrderID {
-						newOrders = append(newOrders, ord)
-					}
-				}
-				pl.Orders = newOrders
-				if len(pl.Orders) == 0 {
-					ob.removePriceLevel(price, model.OrderSideSell)
-				}
-			}
-		}
-	}
-	ob.sellOrders = newSellOrders
-}
-
-// GetDepth 获取订单簿深度
-func (ob *OrderBook) GetDepth(depth int) (bids []*OrderInBook, asks []*OrderInBook) {
-	ob.mu.RLock()
-	defer ob.mu.RUnlock()
-	if depth <= 0 {
-		depth = 10
-	}
-
-	if len(ob.buyOrders) < depth {
-		bids = ob.buyOrders
-	} else {
-		bids = ob.buyOrders[:depth]
-	}
-
-	if len(ob.sellOrders) < depth {
-		asks = ob.sellOrders
-	} else {
-		asks = ob.sellOrders[:depth]
-	}
-
-	return
-}
-
-// GetOrderByID 根据订单ID获取订单
-func (ob *OrderBook) GetOrderByID(orderID string) *OrderInBook {
-	ob.mu.RLock()
-	defer ob.mu.RUnlock()
-	for _, o := range ob.buyOrders {
-		if o.OrderID == orderID {
-			return o
-		}
-	}
-	for _, o := range ob.sellOrders {
-		if o.OrderID == orderID {
-			return o
-		}
+	if l := own.levels[o.Price]; o.Kind == Limit && l != nil && remaining > math.MaxInt64-l.total {
+		return ErrLevelOverflow
 	}
 	return nil
 }
 
-// CancelOrder 取消订单
-func (ob *OrderBook) CancelOrder(orderID string) bool {
-	// 从买单中移除
-	for i, o := range ob.buyOrders {
-		if o.OrderID == orderID {
-			o.Status = model.OrderStatusCancelled
-			ob.buyOrders = append(ob.buyOrders[:i], ob.buyOrders[i+1:]...)
-			// 从价格级别中移除
-			price := o.Price.InexactFloat64()
-			pl := ob.priceLevels[price]
-			if pl != nil {
-				newOrders := make([]*OrderInBook, 0, len(pl.Orders))
-				for _, ord := range pl.Orders {
-					if ord.OrderID != o.OrderID {
-						newOrders = append(newOrders, ord)
-					}
-				}
-				pl.Orders = newOrders
-				if len(pl.Orders) == 0 {
-					ob.removePriceLevel(price, model.OrderSideBuy)
-				}
+// Submit applies a validated and checked order that is absent from the book.
+func (b *Book) Submit(o Order) Result {
+	own, opposite := b.sides(o.Side)
+	r := Result{Remaining: o.Qty}
+	if o.Kind == FOK && unfilled(o, opposite) != 0 {
+		r.Reject = RejectFOKUnfilled
+		return r
+	}
+
+	for n := opposite.best(); n != nil && r.Remaining > 0 && o.crosses(n.Key); {
+		price := n.Key
+		n = opposite.next(n)
+		l := opposite.levels[price]
+		for r.Remaining > 0 && l.orders.Len() > 0 {
+			head := l.orders.Front()
+			maker := head.Value.(*restingOrder)
+			qty := min(r.Remaining, maker.Remaining)
+			r.Fills = append(r.Fills, Fill{MakerID: maker.ID, MakerUserID: maker.UserID, Price: price, Qty: qty})
+			r.Remaining -= qty
+			maker.Remaining -= qty
+			l.total -= qty
+			if maker.Remaining == 0 {
+				delete(b.index, maker.ID)
+				l.orders.Remove(head)
 			}
-			return true
+		}
+		if l.orders.Len() == 0 {
+			opposite.remove(price)
 		}
 	}
 
-	// 从卖单中移除
-	for i, o := range ob.sellOrders {
-		if o.OrderID == orderID {
-			o.Status = model.OrderStatusCancelled
-			ob.sellOrders = append(ob.sellOrders[:i], ob.sellOrders[i+1:]...)
-			price := o.Price.InexactFloat64()
-			pl := ob.priceLevels[price]
-			if pl != nil {
-				newOrders := make([]*OrderInBook, 0, len(pl.Orders))
-				for _, ord := range pl.Orders {
-					if ord.OrderID != o.OrderID {
-						newOrders = append(newOrders, ord)
-					}
-				}
-				pl.Orders = newOrders
-				if len(pl.Orders) == 0 {
-					ob.removePriceLevel(price, model.OrderSideSell)
-				}
+	r.Filled = o.Qty - r.Remaining
+	if o.Kind == Market && r.Filled == 0 {
+		r.Reject = RejectNoLiquidity
+	}
+	if o.Kind == Limit && r.Remaining != 0 {
+		if err := b.add(own, Resting{ID: o.ID, UserID: o.UserID, Side: o.Side, Price: o.Price, Remaining: r.Remaining}); err != nil {
+			panic(err) // CheckSubmit must run before the actor persists this order.
+		}
+		r.Resting = true
+	}
+	return r
+}
+
+func (b *Book) add(s *side, o Resting) error {
+	l := s.levels[o.Price]
+	if l == nil {
+		l = &level{}
+		s.levels[o.Price] = l
+		s.prices.Insert(o.Price)
+	}
+	if o.Remaining > math.MaxInt64-l.total {
+		return ErrLevelOverflow
+	}
+	l.total += o.Remaining
+	b.index[o.ID] = l.orders.PushBack(&restingOrder{Resting: o, level: l})
+	return nil
+}
+
+func (b *Book) Cancel(id string) (remaining int64, ok bool) {
+	e, ok := b.index[id]
+	if !ok {
+		return 0, false
+	}
+	o := e.Value.(*restingOrder)
+	delete(b.index, id)
+	o.level.total -= o.Remaining
+	o.level.orders.Remove(e)
+	if o.level.orders.Len() == 0 {
+		s, _ := b.sides(o.Side)
+		s.remove(o.Price)
+	}
+	return o.Remaining, true
+}
+
+func (s *side) depth(n int) []Level {
+	levels := make([]Level, 0, min(n, len(s.levels)))
+	for p := s.best(); p != nil && len(levels) < n; p = s.next(p) {
+		l := s.levels[p.Key]
+		levels = append(levels, Level{Price: p.Key, Qty: l.total, Orders: l.orders.Len()})
+	}
+	return levels
+}
+
+// Depth returns up to n aggregated levels per side, ordered best price first.
+func (b *Book) Depth(n int) (bids, asks []Level) {
+	if n <= 0 {
+		return nil, nil
+	}
+	return b.bids.depth(n), b.asks.depth(n)
+}
+
+// Resting returns the complete book, bids first, in price-time order.
+func (b *Book) Resting() []Resting {
+	orders := make([]Resting, 0, len(b.index))
+	for _, s := range [2]*side{&b.bids, &b.asks} {
+		for n := s.best(); n != nil; n = s.next(n) {
+			for e := s.levels[n.Key].orders.Front(); e != nil; e = e.Next() {
+				orders = append(orders, e.Value.(*restingOrder).Resting)
 			}
-			return true
 		}
 	}
-
-	return false
+	return orders
 }
 
-// GetBestBid 获取最佳买价
-func (ob *OrderBook) GetBestBid() decimal.Decimal {
-	ob.mu.RLock()
-	defer ob.mu.RUnlock()
-	if ob.bids.IsEmpty() {
-		return decimal.Zero
+// Restore installs a complete book on an empty book. Orders at a given price
+// are restored in slice order. On error the book remains empty.
+func (b *Book) Restore(orders []Resting) error {
+	if b.Len() != 0 {
+		return errors.New("cannot restore into a non-empty book")
 	}
-	node := ob.bids.SeekLast()
-	if node == nil {
-		return decimal.Zero
-	}
-	return decimal.NewFromFloat(node.Key)
-}
-
-// GetBestAsk 获取最佳卖价
-func (ob *OrderBook) GetBestAsk() decimal.Decimal {
-	ob.mu.RLock()
-	defer ob.mu.RUnlock()
-	if ob.asks.IsEmpty() {
-		return decimal.Zero
-	}
-	node := ob.asks.SeekFirst()
-	if node == nil {
-		return decimal.Zero
-	}
-	return decimal.NewFromFloat(node.Key)
-}
-
-// GetSpread 获取买卖价差
-func (ob *OrderBook) GetSpread() decimal.Decimal {
-	ob.mu.RLock()
-	defer ob.mu.RUnlock()
-	bid := ob.GetBestBid()
-	ask := ob.GetBestAsk()
-	if bid.IsZero() || ask.IsZero() {
-		return decimal.Zero
-	}
-	return ask.Sub(bid)
-}
-
-// GetTotalOrders returns the total number of active orders (buy + sell)
-func (ob *OrderBook) GetTotalOrders() (buyCount, sellCount int) {
-	ob.mu.RLock()
-	defer ob.mu.RUnlock()
-	return len(ob.buyOrders), len(ob.sellOrders)
-}
-
-// AddOrderForRecovery adds an order directly to the order book without matching.
-// Used during crash recovery when restoring from a snapshot.
-// Note: For batch recovery, use BatchAddOrdersForRecovery for better performance.
-func (ob *OrderBook) AddOrderForRecovery(order *OrderInBook) {
-	ob.mu.Lock()
-	defer ob.mu.Unlock()
-	ob.addToBookInternal(order)
-}
-
-// BatchAddOrdersForRecovery adds multiple orders to the order book without matching.
-// This is optimized for crash recovery - it uses O(n log n) sorting instead of O(n²) insertions.
-// Should only be called during recovery when no other operations are happening.
-func (ob *OrderBook) BatchAddOrdersForRecovery(orders []*OrderInBook) {
-	ob.mu.Lock()
-	defer ob.mu.Unlock()
-
-	if len(orders) == 0 {
-		return
-	}
-
-	var buys []*OrderInBook
-	var sells []*OrderInBook
-
+	restored := New()
 	for _, o := range orders {
-		switch o.Side {
-		case model.OrderSideBuy:
-			buys = append(buys, o)
-		case model.OrderSideSell:
-			sells = append(sells, o)
+		if o.ID == "" || o.UserID <= 0 || (o.Side != Buy && o.Side != Sell) || o.Price <= 0 || o.Remaining <= 0 {
+			return fmt.Errorf("invalid resting order %q", o.ID)
+		}
+		if restored.Has(o.ID) {
+			return fmt.Errorf("duplicate resting order %q", o.ID)
+		}
+		s, _ := restored.sides(o.Side)
+		if err := restored.add(s, o); err != nil {
+			return err
 		}
 	}
-
-	// Sort: buys by price DESC, sells by price ASC (preserving CreatedAt order for same price)
-	sort.Slice(buys, func(i, j int) bool {
-		if buys[i].Price.Equal(buys[j].Price) {
-			return buys[i].CreatedAt < buys[j].CreatedAt
-		}
-		return buys[i].Price.GreaterThan(buys[j].Price)
-	})
-
-	sort.Slice(sells, func(i, j int) bool {
-		if sells[i].Price.Equal(sells[j].Price) {
-			return sells[i].CreatedAt < sells[j].CreatedAt
-		}
-		return sells[i].Price.LessThan(sells[j].Price)
-	})
-
-	// Append all orders and build price levels
-	for _, o := range buys {
-		ob.buyOrders = append(ob.buyOrders, o)
-		price := o.Price.InexactFloat64()
-		pl, exists := ob.priceLevels[price]
-		if !exists {
-			pl = &PriceLevel{Price: price, Orders: make([]*OrderInBook, 0)}
-			ob.priceLevels[price] = pl
-			ob.bids.Insert(price)
-		}
-		pl.Orders = append(pl.Orders, o)
-	}
-
-	for _, o := range sells {
-		ob.sellOrders = append(ob.sellOrders, o)
-		price := o.Price.InexactFloat64()
-		pl, exists := ob.priceLevels[price]
-		if !exists {
-			pl = &PriceLevel{Price: price, Orders: make([]*OrderInBook, 0)}
-			ob.priceLevels[price] = pl
-			ob.asks.Insert(price)
-		}
-		pl.Orders = append(pl.Orders, o)
-	}
+	*b = *restored
+	return nil
 }
 
-// GenerateTradeID 生成交易ID
-func GenerateTradeID() string {
-	return fmt.Sprintf("TRD%d%s", time.Now().UnixNano(), uuidShort())
-}
-
-// uuidShort 生成短 UUID
-func uuidShort() string {
-	return fmt.Sprintf("%08x", time.Now().UnixNano()%0xffffffff)
-}
+func (b *Book) Has(id string) bool { return b.index[id] != nil }
+func (b *Book) Len() int           { return len(b.index) }
